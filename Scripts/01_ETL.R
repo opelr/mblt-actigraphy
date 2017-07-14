@@ -2,11 +2,12 @@
 ## Project: actigraphy -- H4085
 ## Author: Ryan Opel -- @opelr
 ## Date: 2017-07-12
-## Version: 1.1.0
+## Version: 0.1.0
 
 library(magrittr)
 library(tidyverse)
 library(lubridate)
+library(zoo)
 # devtools::install_github("opelr/opelR")
 
 FILE_PATH <- ".\\Data\\Raw\\"
@@ -38,22 +39,22 @@ get_actigraphy_headers <- function(path) {
   threshold_wake <- acti$X2[acti$X1 == "Wake Threshold Value:"]
   threshold_light <- acti$X2[acti$X1 == "White Light Threshold:"]
   
-  header_info <- data.frame(patient_name = patient_name) %>%
-    mutate(patient_sex = patient_sex) %>%
-    mutate(patient_DOB = as.POSIXct(strptime(patient_DOB,
-                                             format = "%Y-%m-%d"))) %>%
-    mutate(patient_age = patient_age) %>%
-    mutate(recording_date_start = as.POSIXct(strptime(recording_date_start,
-                                                      format = "%Y-%m-%d"))) %>%
-    mutate(recording_date_end = as.POSIXct(strptime(recording_date_end,
-                                                    format = "%Y-%m-%d"))) %>%
-    mutate(recording_days_span = recording_days_span) %>%
-    mutate(recording_epoch_length = recording_epoch_length) %>%
-    mutate(watch_serial_no = watch_serial_no) %>%
-    mutate(calibration_activity = calibration_activity) %>%
-    mutate(calibration_light = calibration_light) %>%
-    mutate(threshold_wake = threshold_wake) %>%
-    mutate(threshold_light = threshold_light)
+  header_info <- data.frame(patient_ID = gsub(" ", "_", patient_name)) %>%
+    mutate(patient_sex = patient_sex,
+           patient_DOB = as.POSIXct(strptime(patient_DOB,
+                                             format = "%Y-%m-%d")),
+           patient_age = patient_age,
+           recording_date_start = as.POSIXct(strptime(recording_date_start,
+                                                      format = "%Y-%m-%d")),
+           recording_date_end = as.POSIXct(strptime(recording_date_end,
+                                                    format = "%Y-%m-%d")),
+           recording_days_span = recording_days_span,
+           recording_epoch_length = recording_epoch_length,
+           watch_serial_no = watch_serial_no,
+           calibration_activity = calibration_activity,
+           calibration_light = calibration_light,
+           threshold_wake = threshold_wake,
+           threshold_light = threshold_light)
   
   return(header_info)
 }
@@ -83,7 +84,7 @@ parse_actigraphy_data <- function(path) {
   nam <- as.character(acti_files$File[acti_files$rootpath == path])
   nam <- strsplit(nam, "_")[[1]][1:2]
   
-  acti$ID = paste0(nam, collapse = "_")
+  acti$patient_ID = paste0(nam, collapse = "_")
   
   ## Date/Time Calculations
   acti$DateTime = as.POSIXct(strptime(x = paste(acti$Date, acti$Time),
@@ -91,11 +92,13 @@ parse_actigraphy_data <- function(path) {
   acti$Time = as.POSIXct(strptime(acti$Time, format = "%I:%M:%S %p"))
   
   acti %<>%
-    mutate(Hour = hour(DateTime)) %>%
-    mutate(AM_PM = factor(floor(Hour/12), levels = 0:1,
-                          labels = c("AM", "PM"))) %>%
-    mutate(Weekend = factor(chron::is.weekend(DateTime),
-                            labels = c("Weekend", "Weekday")))
+    mutate(Hour = hour(DateTime),
+           AM_PM = factor(floor(Hour/12), levels = 0:1,
+                          labels = c("AM", "PM")),
+           Day_of_Week = weekdays(DateTime),
+           Weekend = factor(ifelse(Day_of_Week %in% c("Saturday", "Sunday"),
+                            "Weekend", "Weekday")),
+           DateAbbr = format(DateTime, format = "%b %d"))
     
   return(acti)
   
@@ -127,13 +130,13 @@ sunset <- function(city, state = "OR", date) {
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")) %>%
     reshape2::melt(., "Day") %>%
     set_colnames(c("Day", "Month", "Value")) %>%
-    mutate(Sunrise = gsub(" [0-9]{4}", "", Value)) %>%
-    mutate(Sunset = gsub("[0-9]{4} ", "", Value)) %>%
-    mutate(Date = as.POSIXct(strptime(paste0(Month, Day, year(datetime)),
-                                      format = "%b%d%Y"))) %>%
-    mutate(Sunrise = as.POSIXct(strptime(paste0(Month, Day, year(datetime),
-                                                Sunrise), format = "%b%d%Y%H%M"))) %>%
-    mutate(Sunset = as.POSIXct(strptime(paste0(Month, Day, year(datetime),
+    mutate(Sunrise = gsub(" [0-9]{4}", "", Value),
+           Sunset = gsub("[0-9]{4} ", "", Value),
+           Date = as.POSIXct(strptime(paste0(Month, Day, year(datetime)),
+                                      format = "%b%d%Y")),
+           Sunrise = as.POSIXct(strptime(paste0(Month, Day, year(datetime),
+                                                Sunrise), format = "%b%d%Y%H%M")),
+           Sunset = as.POSIXct(strptime(paste0(Month, Day, year(datetime),
                                                Sunset), format = "%b%d%Y%H%M"))) %>%
     dplyr::filter(complete.cases(.)) %>%
     dplyr::select(-Value, -Day, -Month))
@@ -155,16 +158,96 @@ sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
   })) %>%
   mutate(Date = as.character(Date))
 
-actigraphy <- merge(actigraphy, sunsetDF, by = "Date") %>%
+actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   mutate(SunPeriod = factor(ifelse(DateTime <= Sunrise, "Dawn",
                             ifelse(DateTime > Sunrise & DateTime < Sunset, "Day",
                             ifelse(DateTime >= Sunset, "Night", NA))))) %>%
-  dplyr::arrange(., ID, DateTime) %>%
-  mutate(Activity = opelr::numfac(Activity),
+  dplyr::arrange(., patient_ID, DateTime) %>%
+  mutate(Activity = opelr::numfac(Activity) + 1,
          Light = opelr::numfac(Light),
          DAR_Period = factor(ifelse(DateTime < paste(Date, "07:00:00 PDT") |
                                     DateTime > paste(Date, "21:59:59 PDT"),
-                                    "Night", "Day")))
+                                    "Night", "Day")),
+         log_Activity = log10(Activity),
+         log_Light = log10(Light))
+
+## ------ Rolling Window/Off-Wrist Detection ------
+
+moving_window <- function(data, window, step, FUN, align) {
+  if (! align %in% c("left", "right", "center")) stop('"align" must be "left", "right", or "center"')
+  if (align == "center" & window %% 2 == 0) stop("'window' must be odd when 'align = center'")
+  
+  total <- length(data)
+  
+  if (align == "left") {
+    spots <- seq(from = 1, to = total - window + 1, by = step)
+  } else if (align == "right") {
+    spots <- seq(from = window, to = total, by = step)
+  } else {
+    spots <- seq(from = ceiling(window/2), to = total - floor(window/2),
+                 by = step)
+  }
+  
+  result <- vector(length = length(spots))
+  
+  for(i in 1:length(spots)){
+    if (align == "left") {
+      result[i] <- eval(call(FUN, data[spots[i]:(spots[i] + window - 1)]))
+    } else if (align == "right") {
+      result[i] <- eval(call(FUN, data[(spots[i] - window + 1):spots[i]]))
+    } else {
+      result[i] <- eval(call(FUN, data[(spots[i] - floor(window/2)):(spots[i] + floor(window/2))]))
+    }
+  }
+  
+  if (align == "left") {
+    result <- c(result, rep(NA, window - 1))
+  } else if (align == "right") {
+    result <- c(rep(NA, window - 1), result)
+  } else {
+    result <- c(rep(NA, floor(window/2)), result, rep(NA, floor(window/2)))
+  }
+  
+  return(result)
+}
+
+dat <- dplyr::filter(actigraphy, patient_ID == "Carolyn_Jones", Day == "4")
+
+ggplot(dat) +
+  # geom_line(aes(x = Time, y = Light), color = "Orange") +
+  geom_line(aes(x = Time, y = Activity), color = "Black") +
+  scale_x_datetime(date_labels = "%I %p") +
+  # scale_y_log10() +
+  facet_grid(Day + DateAbbr ~ .)
+
+dat %<>% 
+  mutate(
+    Rolling_Activity_SD = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
+      moving_window(dat$Activity[dat$patient_ID == ii], 7, 1, FUN = "sd", "center")})),
+    Rolling_Activity_mean = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
+      moving_window(dat$Activity[dat$patient_ID == ii], 15, 1, FUN = "mean", "center")})),
+    Sleep = factor(ifelse(Rolling_Activity_mean < 100, "Sleep", "Wake")),
+    Activity_diff = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
+      c(NaN, diff(dat$Activity[dat$patient_ID == ii], 1))})))
+
+## ------ Lotjonen ------
+
+dat %<>% 
+  mutate(
+    Lotjonen_mean = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
+      moving_window(dat$Activity[dat$patient_ID == ii], 15, 1, FUN = "mean", "center")})),
+    Lotjonen_sd = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
+      moving_window(dat$Activity[dat$patient_ID == ii], 17, 1, FUN = "sd", "center")})),
+    Lotjonen_ln = log(Activity) + 0.1,
+    Lotjonen_Counts = Activity > 10,
+    Lotjonen_nat = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
+      moving_window(dat$Lotjonen_Counts[dat$patient_ID == ii], 23, 1, FUN = "sum", "center")})))
+
+dat[, c("Rolling_Activity_mean", "Rolling_Activity_SD", "Sleep", "Activity_diff")]
+
+## How can I be certain this person isn't just asleep during the day?
+## compare to sleep diary? What if they don't complete one?
+## If Activity Diff is 0 (consistent?) for j number of epochs, call it watch off
 
 ## ------ Saving RDS ------
 
