@@ -2,25 +2,25 @@
 ## Project: actigraphy -- H4085
 ## Author: Ryan Opel -- @opelr
 ## Date: 2017-07-12
-## Version: 1.0.0
+## Version: 0.1.0
 
 library(magrittr)
 library(tidyverse)
 library(lubridate)
 
 acti_files <- readRDS(".\\Data\\actigraphy_header.rds")
-actigraphy <- readRDS(".\\Data\\actigraphy_data.rds")
+actigraphy <- readRDS(".\\Data\\actigraphy_data.rds") 
 
 ## ------ Can I determine when the light was on? ------
 
-dat <- actigraphy[actigraphy$ID == "Sophie_Lee", ]
+dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ]
 
-ggplot(dat) +
-  geom_line(aes(x = Time, y = Light)) + 
-  geom_line(aes(x = Time, y = Activity), color = "Red") +
+ggplot(dat[dat$Day == 5, ]) +
+  geom_line(aes(x = Time, y = Light), color = "Orange") + 
+  geom_line(aes(x = Time, y = Activity), color = "Black") +
   scale_x_datetime(date_labels = "%I %p") + 
   scale_y_log10() + 
-  facet_grid(Day ~ .)
+  facet_grid(Day + DateAbbr ~ .)
 
 ## ------ Sleep-wake assessments ------
 # taken from http://www.neurology.org/content/88/3/268.long
@@ -30,7 +30,8 @@ ggplot(dat) +
 DAR_parent <- aggregate(Activity ~ ID + DAR_Period + Day, actigraphy, mean) %>%
   reshape2::dcast(., formula = ID + Day ~ DAR_Period, value.var = "Activity") %>%
   set_colnames(c("ID", "Day_number", "Day", "Night")) %>%
-  mutate(DAR = 100 * (Day/(Day + Night)))
+  mutate(DAR = 100 * (Day/(Day + Night))) %>%
+  filter(complete.cases(.))
 
 ## how do we deal with infinites?
 
@@ -79,3 +80,4 @@ sleep <- data.frame(do.call("rbind", lapply(unique(actigraphy$ID), function (ii)
   mutate(Weekend = factor(chron::is.weekend(Date), levels = c(T,F),
                           labels = c("Weekend", "Weekday")))
   
+## ------ KNN Sleep Stage Prediction ------
