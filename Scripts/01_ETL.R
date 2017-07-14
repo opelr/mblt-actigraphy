@@ -220,30 +220,28 @@ ggplot(dat) +
   # scale_y_log10() +
   facet_grid(Day + DateAbbr ~ .)
 
-dat %<>% 
+actigraphy %<>% 
   mutate(
-    Rolling_Activity_SD = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
-      moving_window(dat$Activity[dat$patient_ID == ii], 7, 1, FUN = "sd", "center")})),
-    Rolling_Activity_mean = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
-      moving_window(dat$Activity[dat$patient_ID == ii], 15, 1, FUN = "mean", "center")})),
+    Rolling_Activity_SD = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
+      moving_window(actigraphy$Activity[actigraphy$patient_ID == ii], 7, 1, FUN = "sd", "center")})),
+    Rolling_Activity_mean = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
+      moving_window(actigraphy$Activity[actigraphy$patient_ID == ii], 15, 1, FUN = "mean", "center")})),
     Sleep = factor(ifelse(Rolling_Activity_mean < 100, "Sleep", "Wake")),
-    Activity_diff = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
-      c(NaN, diff(dat$Activity[dat$patient_ID == ii], 1))})))
+    Activity_diff = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
+      c(NaN, diff(actigraphy$Activity[actigraphy$patient_ID == ii], 1))})))
 
 ## ------ Lotjonen ------
 
-dat %<>% 
+actigraphy %<>% 
   mutate(
-    Lotjonen_mean = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
-      moving_window(dat$Activity[dat$patient_ID == ii], 15, 1, FUN = "mean", "center")})),
-    Lotjonen_sd = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
-      moving_window(dat$Activity[dat$patient_ID == ii], 17, 1, FUN = "sd", "center")})),
+    Lotjonen_mean = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
+      moving_window(actigraphy$Activity[actigraphy$patient_ID == ii], 15, 1, FUN = "mean", "center")})),
+    Lotjonen_sd = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
+      moving_window(actigraphy$Activity[actigraphy$patient_ID == ii], 17, 1, FUN = "sd", "center")})),
     Lotjonen_ln = log(Activity) + 0.1,
     Lotjonen_Counts = Activity > 10,
-    Lotjonen_nat = do.call("c", lapply(unique(dat$patient_ID), function(ii) {
-      moving_window(dat$Lotjonen_Counts[dat$patient_ID == ii], 23, 1, FUN = "sum", "center")})))
-
-dat[, c("Rolling_Activity_mean", "Rolling_Activity_SD", "Sleep", "Activity_diff")]
+    Lotjonen_nat = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
+      moving_window(actigraphy$Lotjonen_Counts[actigraphy$patient_ID == ii], 23, 1, FUN = "sum", "center")})))
 
 ## How can I be certain this person isn't just asleep during the day?
 ## compare to sleep diary? What if they don't complete one?
