@@ -7,7 +7,7 @@
 library(magrittr)
 library(tidyverse)
 library(lubridate)
-library(zoo)
+library(zoo)W
 # devtools::install_github("opelr/opelR")
 
 FILE_PATH <- ".\\Data\\Raw\\"
@@ -164,52 +164,67 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
                             ifelse(DateTime >= Sunset, "Night", NA))))) %>%
   dplyr::arrange(., patient_ID, DateTime) %>%
   mutate(Activity = opelr::numfac(Activity) + 1,
-         Light = opelr::numfac(Light),
+         Light = opelr::numfac(Light) + 1,
          DAR_Period = factor(ifelse(DateTime < paste(Date, "07:00:00 PDT") |
                                     DateTime > paste(Date, "21:59:59 PDT"),
                                     "Night", "Day")),
          log_Activity = log10(Activity),
          log_Light = log10(Light))
 
-## ------ Rolling Window/Off-Wrist Detection ------
+## ------ Rolling Window Function ------
 
-moving_window <- function(data, window, step, FUN, align) {
+moving_window <- function(dataframe, column = "Activity", window, step, FUN, align) {
   if (! align %in% c("left", "right", "center")) stop('"align" must be "left", "right", or "center"')
   if (align == "center" & window %% 2 == 0) stop("'window' must be odd when 'align = center'")
   
-  total <- length(data)
+  df <- dataframe
   
-  if (align == "left") {
-    spots <- seq(from = 1, to = total - window + 1, by = step)
-  } else if (align == "right") {
-    spots <- seq(from = window, to = total, by = step)
-  } else {
-    spots <- seq(from = ceiling(window/2), to = total - floor(window/2),
-                 by = step)
-  }
-  
-  result <- vector(length = length(spots))
-  
-  for(i in 1:length(spots)){
+  do.call("c", lapply(unique(df[, "patient_ID"]), function(ii) {
+    data <- df[df[, "patient_ID"] == ii, column]
+    
+    total <- length(data)
+    
     if (align == "left") {
-      result[i] <- eval(call(FUN, data[spots[i]:(spots[i] + window - 1)]))
+      spots <- seq(from = 1, to = total - window + 1, by = step)
     } else if (align == "right") {
-      result[i] <- eval(call(FUN, data[(spots[i] - window + 1):spots[i]]))
+      spots <- seq(from = window, to = total, by = step)
     } else {
-      result[i] <- eval(call(FUN, data[(spots[i] - floor(window/2)):(spots[i] + floor(window/2))]))
+      spots <- seq(from = ceiling(window/2), to = total - floor(window/2),
+                   by = step)
     }
-  }
-  
-  if (align == "left") {
-    result <- c(result, rep(NA, window - 1))
-  } else if (align == "right") {
-    result <- c(rep(NA, window - 1), result)
-  } else {
-    result <- c(rep(NA, floor(window/2)), result, rep(NA, floor(window/2)))
-  }
-  
-  return(result)
+    
+    result <- vector(length = length(spots))
+    
+    for(i in 1:length(spots)){
+      if (align == "left") {
+        result[i] <- eval(call(FUN, data[spots[i]:(spots[i] + window - 1)]))
+      } else if (align == "right") {
+        result[i] <- eval(call(FUN, data[(spots[i] - window + 1):spots[i]]))
+      } else {
+        result[i] <- eval(call(FUN, data[(spots[i] - floor(window/2)):(spots[i] + floor(window/2))]))
+      }
+    }
+    
+    if (align == "left") {
+      result <- c(result, rep(NA, window - 1))
+    } else if (align == "right") {
+      result <- c(rep(NA, window - 1), result)
+    } else {
+      result <- c(rep(NA, floor(window/2)), result, rep(NA, floor(window/2)))
+    }
+    
+    return(result)
+  }))
 }
+
+zero_range <- function(x, tol = .Machine$double.eps ^ 0.5) {
+  ## Tests for equality
+  if (length(x) == 1) return(TRUE)
+  x <- range(x) / mean(x)
+  isTRUE(all.equal(x[1], x[2], tolerance = tol))
+}
+
+## ------ Lotjonen Parameters & Off-Wrist Detection ------
 
 dat <- dplyr::filter(actigraphy, patient_ID == "Carolyn_Jones", Day == "4")
 
@@ -217,35 +232,47 @@ ggplot(dat) +
   # geom_line(aes(x = Time, y = Light), color = "Orange") +
   geom_line(aes(x = Time, y = Activity), color = "Black") +
   scale_x_datetime(date_labels = "%I %p") +
-  # scale_y_log10() +
   facet_grid(Day + DateAbbr ~ .)
 
-actigraphy %<>% 
+dat %<>% 
   mutate(
-    Rolling_Activity_SD = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
-      moving_window(actigraphy$Activity[actigraphy$patient_ID == ii], 7, 1, FUN = "sd", "center")})),
-    Rolling_Activity_mean = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
-      moving_window(actigraphy$Activity[actigraphy$patient_ID == ii], 15, 1, FUN = "mean", "center")})),
-    Sleep = factor(ifelse(Rolling_Activity_mean < 100, "Sleep", "Wake")),
-    Activity_diff = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
-      c(NaN, diff(actigraphy$Activity[actigraphy$patient_ID == ii], 1))})))
-
-## ------ Lotjonen ------
-
-actigraphy %<>% 
-  mutate(
-    Lotjonen_mean = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
-      moving_window(actigraphy$Activity[actigraphy$patient_ID == ii], 15, 1, FUN = "mean", "center")})),
-    Lotjonen_sd = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
-      moving_window(actigraphy$Activity[actigraphy$patient_ID == ii], 17, 1, FUN = "sd", "center")})),
+    Lotjonen_mean = moving_window(., "Activity", 15, 1,FUN = "mean", "center"),
+    Lotjonen_sd = moving_window(., "Activity", 17, 1, FUN = "sd", "center"),
     Lotjonen_ln = log(Activity) + 0.1,
     Lotjonen_Counts = Activity > 10,
-    Lotjonen_nat = do.call("c", lapply(unique(actigraphy$patient_ID), function(ii) {
-      moving_window(actigraphy$Lotjonen_Counts[actigraphy$patient_ID == ii], 23, 1, FUN = "sum", "center")})))
+    Sleep = factor(ifelse(Lotjonen_mean < 100, "Sleep", "Wake")),
+    Activity_diff = do.call("c", lapply(unique(.[, "patient_ID"]), function(ii) {
+      c(NaN, diff(.[.[, "patient_ID"] == ii, "Activity"], 1))})),
+    No_Activity_Change_Window = moving_window(., "Activity", 15, 1,
+                                              FUN = "zero_range", "left"),
+    No_Activity_Length = rep(rle(No_Activity_Change_Window)$lengths,
+                             rle(No_Activity_Change_Window)$lengths)) %>%
+  mutate(Lotjonen_nat = moving_window(., "Lotjonen_Counts", 23, 1,
+                                      FUN = "sum", "center"))
+
+dat[230:330, c("Activity", "Activity_diff", "No_Activity_Change_30", "No_Activity_Length")]
+
+## If No_Activity_Change_30 == TRUE & < 30, make FALSE
+## If No_Activity_Change_30 has FALSE surrounded by 30 TRUE, make T->F
+
+for (ii in 1:length(rle(dat$No_Activity_Length)$values)) {
+  rle_values <- rle(dat$No_Activity_Length)$values
+  
+  ## grab elapsed rows (ii - 2)
+  ## use na.locf to carry down decision
+  
+  
+  if (ii == 1) {
+    elapsed_rows <- 0
+  } else {
+    elapsed_rows <- sum(rle_values[seq(1, ii)])
+  }
+  
+}
 
 ## How can I be certain this person isn't just asleep during the day?
 ## compare to sleep diary? What if they don't complete one?
-## If Activity Diff is 0 (consistent?) for j number of epochs, call it watch off
+## If Activity Diff is 0 (consistent?) for j number of epochs (look forward), call it watch off
 
 ## ------ Saving RDS ------
 
