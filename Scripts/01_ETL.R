@@ -7,7 +7,7 @@
 library(magrittr)
 library(tidyverse)
 library(lubridate)
-library(zoo)W
+library(zoo)
 # devtools::install_github("opelr/opelR")
 
 FILE_PATH <- ".\\Data\\Raw\\"
@@ -171,7 +171,7 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
          log_Activity = log10(Activity),
          log_Light = log10(Light))
 
-## ------ Rolling Window Function ------
+## ------ Rolling Window & Off-Wrist Functions ------
 
 moving_window <- function(dataframe, column = "Activity", window, step, FUN, align) {
   if (! align %in% c("left", "right", "center")) stop('"align" must be "left", "right", or "center"')
@@ -224,55 +224,91 @@ zero_range <- function(x, tol = .Machine$double.eps ^ 0.5) {
   isTRUE(all.equal(x[1], x[2], tolerance = tol))
 }
 
-## ------ Lotjonen Parameters & Off-Wrist Detection ------
-
-dat <- dplyr::filter(actigraphy, patient_ID == "Carolyn_Jones", Day == "4")
-
-ggplot(dat) +
-  # geom_line(aes(x = Time, y = Light), color = "Orange") +
-  geom_line(aes(x = Time, y = Activity), color = "Black") +
-  scale_x_datetime(date_labels = "%I %p") +
-  facet_grid(Day + DateAbbr ~ .)
-
-dat %<>% 
-  mutate(
-    Lotjonen_mean = moving_window(., "Activity", 15, 1,FUN = "mean", "center"),
-    Lotjonen_sd = moving_window(., "Activity", 17, 1, FUN = "sd", "center"),
-    Lotjonen_ln = log(Activity) + 0.1,
-    Lotjonen_Counts = Activity > 10,
-    Sleep = factor(ifelse(Lotjonen_mean < 100, "Sleep", "Wake")),
-    Activity_diff = do.call("c", lapply(unique(.[, "patient_ID"]), function(ii) {
-      c(NaN, diff(.[.[, "patient_ID"] == ii, "Activity"], 1))})),
-    No_Activity_Change_Window = moving_window(., "Activity", 15, 1,
-                                              FUN = "zero_range", "left"),
-    No_Activity_Length = rep(rle(No_Activity_Change_Window)$lengths,
-                             rle(No_Activity_Change_Window)$lengths)) %>%
-  mutate(Lotjonen_nat = moving_window(., "Lotjonen_Counts", 23, 1,
-                                      FUN = "sum", "center"))
-
-dat[230:330, c("Activity", "Activity_diff", "No_Activity_Change_30", "No_Activity_Length")]
-
-## If No_Activity_Change_30 == TRUE & < 30, make FALSE
-## If No_Activity_Change_30 has FALSE surrounded by 30 TRUE, make T->F
-
-for (ii in 1:length(rle(dat$No_Activity_Length)$values)) {
-  rle_values <- rle(dat$No_Activity_Length)$values
+off_wrist_detector <- function(data) {
+  df <- data
   
-  ## grab elapsed rows (ii - 2)
-  ## use na.locf to carry down decision
+  rle_values <- rle(df$No_Activity_Length)$lengths
   
+  lst <- lapply(1:length(rle_values), function(ii) {
+    
+    current_value <- rle_values[ii]
+    
+    ## grab elapsed rows (ii - 2)
+    ## use na.locf to carry down decision
+    if (ii == 1) {
+      
+      out <- rep(df$No_Activity_Change_Window[1], current_value)
+      
+    } else if (ii == length(rle_values)) {
+      
+      out <- rep(NA, current_value)
+      
+    } else {
+      
+      previous_value <- rle_values[ii - 1]
+      next_value <- rle_values[ii + 1]
+      
+      elapsed_rows <- sum(rle_values[seq(0, ii - 1)]) + 1
+      
+      change_bool <- df[elapsed_rows, "No_Activity_Change_Window"]
+      
+      if (change_bool == TRUE & previous_value >= 30 & next_value >= 30) {
+        out <- rep.int(FALSE, current_value)
+      } else if (change_bool == FALSE & previous_value >= 30 & next_value >= 30) {
+        out <- rep.int(TRUE, current_value)
+      } else {
+        out <- rep.int(change_bool, current_value)
+      }
+    }
+    return(out)
+  })
   
-  if (ii == 1) {
-    elapsed_rows <- 0
-  } else {
-    elapsed_rows <- sum(rle_values[seq(1, ii)])
-  }
-  
+  return(do.call("c", lst))
 }
 
-## How can I be certain this person isn't just asleep during the day?
-## compare to sleep diary? What if they don't complete one?
-## If Activity Diff is 0 (consistent?) for j number of epochs (look forward), call it watch off
+## ------ Lotjonen Parameters & Off-Wrist Detection ------
+
+actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
+  lapply(., function(ii) {
+    ii %<>% 
+      mutate(
+        Lotjonen_mean = moving_window(., "Activity", 15, 1,FUN = "mean", "center"),
+        Lotjonen_sd = moving_window(., "Activity", 17, 1, FUN = "sd", "center"),
+        Lotjonen_ln = log(Activity) + 0.1,
+        Lotjonen_Counts = Activity > 10,
+        Sleep = factor(ifelse(Lotjonen_mean < 100, "Sleep", "Wake")),
+        Activity_diff = do.call("c", lapply(unique(.[, "patient_ID"]), function(ii) {
+          c(NaN, diff(.[.[, "patient_ID"] == ii, "Activity"], 1))})),
+        No_Activity_Change_Window = moving_window(., "Activity", 15, 1,
+                                                  FUN = "zero_range", "left"),
+        No_Activity_Change_Window = na.locf(No_Activity_Change_Window),
+        No_Activity_Length = rep(rle(No_Activity_Change_Window)[["lengths"]],
+                                 rle(No_Activity_Change_Window)[["lengths"]])) %>%
+      mutate(Lotjonen_nat = moving_window(., "Lotjonen_Counts", 23, 1,
+                                          FUN = "sum", "center"),
+             Off_Wrist = off_wrist_detector(.),
+             #### THIS IS WRONG
+             #### FIX IT
+             Lotjonen_Sleep = 1.687 + (0.003 * Activity) - (0.034 * Lotjonen_mean) -  #### THIS IS WRONG
+                              (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - 
+                              (0.127 * Lotjonen_ln))
+            
+    return(ii)
+}) %>%
+  do.call("rbind", .) %>%
+  set_rownames(1:nrow(.))
+
+## ------ Smoothing Sleep ------
+
+# "Arousals lasting 3 minutes or less were rescored as sleep"
+
+## ------ Cole Post-Processing ------
+
+# 1) The sleep of 1, 3, or 4 minutes was rescored as wake if it preceded at least 4, 10, or 15 minutes of wake;
+# 2) the sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes of wake was rescored as wake.
+
+## ------ 
+
 
 ## ------ Saving RDS ------
 
