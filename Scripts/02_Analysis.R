@@ -11,73 +11,118 @@ library(lubridate)
 acti_files <- readRDS(".\\Data\\actigraphy_header.rds")
 actigraphy <- readRDS(".\\Data\\actigraphy_data.rds") 
 
-## ------ Can I determine when the light was on? ------
+## ------ Visualizing a single patient ------
 
-dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ]
+dat <- actigraphy[actigraphy$patient_ID == "Carolyn_Jones" & actigraphy$Day == "5", ]
 
-ggplot(dat[dat$Day == 5, ]) +
+ggplot(dat) +
   geom_line(aes(x = Time, y = Light), color = "Orange") + 
   geom_line(aes(x = Time, y = Activity), color = "Black") +
   scale_x_datetime(date_labels = "%I %p") + 
-  scale_y_log10() + 
+  # scale_y_log10() + 
   facet_grid(Day + DateAbbr ~ .)
 
-## ------ Sleep-wake assessments ------
+## ------ Percent Time Off-Wrist ------
+
+off_wrist <- as.data.frame.table(xtabs(~patient_ID + Off_Wrist + Day, data = actigraphy)) %>%
+  reshape2::dcast(., formula = patient_ID + Day ~ Off_Wrist, value.var = "Freq") %>%
+  rename(Watch_On = `FALSE`, Watch_Off = `TRUE`, Day_number = Day) %>%
+  mutate(Percent_Off = 100 * Watch_Off/(Watch_On + Watch_Off),
+         Total_Epochs = Watch_On + Watch_Off) %>%
+  dplyr::filter(complete.cases(.))
+
+aggregate(Percent_Off ~ patient_ID, off_wrist, mean)
+
+ggplot(off_wrist, aes(Day, Percent_Off, group = patient_ID, color = patient_ID)) + 
+  geom_line()
+
+## ------ Daytime activity ratio (DAR) ------
 # taken from http://www.neurology.org/content/88/3/268.long
+# Daytime is defined as 7AM - 10 PM --> can be modified in 01_ETL.R script
 
-### Daytime activity ratio (DAR)
-
-DAR_parent <- aggregate(Activity ~ ID + DAR_Period + Day, actigraphy, mean) %>%
-  reshape2::dcast(., formula = ID + Day ~ DAR_Period, value.var = "Activity") %>%
-  set_colnames(c("ID", "Day_number", "Day", "Night")) %>%
+DAR_parent <- aggregate(Activity ~ patient_ID + DAR_Period + Day, actigraphy, mean) %>%
+  reshape2::dcast(., formula = patient_ID + Day ~ DAR_Period, value.var = "Activity") %>%
+  set_colnames(c("patient_ID", "Day_number", "Day", "Night")) %>%
   mutate(DAR = 100 * (Day/(Day + Night))) %>%
-  filter(complete.cases(.))
+  filter(complete.cases(.)) %>%
+  # Use `off_wrist` to verify that watch is on and recording for most of the day
+  merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
+        by = c("patient_ID", "Day_number")) %>%
+  dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2))
 
 ## how do we deal with infinites?
 
-DAR_child <- cbind(aggregate(DAR ~ ID, DAR_parent, mean),
-                   aggregate(DAR ~ ID, DAR_parent, function(X) {
+DAR_child <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
+                   aggregate(DAR ~ patient_ID, DAR_parent, function(X) {
                      opelr::sem(X, na.rm = T)
                     })[2]) %>%
-  set_colnames(c("ID", "DAR", "SEM")) %>%
+  set_colnames(c("patient_ID", "DAR", "SEM")) %>%
   mutate(ymax = DAR + SEM) %>%
   mutate(ymin = DAR - SEM)
 
-ggplot(DAR_child, aes(x = ID, y = DAR)) +
+ggplot(DAR_child, aes(x = patient_ID, y = DAR)) +
   geom_bar(stat = "identity") +
   geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25)
 
-### Nighttime sleep duration
+## ------ Nighttime sleep duration ------
 
-NSD_parent <- aggregate(Line ~ ID + Sleep_Wake + Day + DAR_Period,
+# Need to decide which sleep determinant is the best in previous script
+# Again, daytime is defined as 7AM - 10 PM --> can be modified in 01_ETL.R script
+
+# `Line` is being used as a dummy variable
+NSD_parent <- aggregate(Line ~ patient_ID + Sleep_Wake + Day + DAR_Period,
                         actigraphy, length) %>%
-  reshape2::dcast(., formula = ID + DAR_Period + Day ~ Sleep_Wake,
+  reshape2::dcast(., formula = patient_ID + DAR_Period + Day ~ Sleep_Wake,
                   value.var = "Line") %>%
-  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake)))
+  rename(Day_number = Day) %>%
+  merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
+        by = c("patient_ID", "Day_number")) %>%
+  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake))) %>%
+  dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2))
 
-NSD_child <- cbind(aggregate(Percent_Sleep ~ ID, NSD_parent, mean),
-                   aggregate(Percent_Sleep ~ ID, NSD_parent, function(X) {
+NSD_child <- cbind(aggregate(Percent_Sleep ~ patient_ID, NSD_parent, mean),
+                   aggregate(Percent_Sleep ~ patient_ID, NSD_parent, function(X) {
                      opelr::sem(X, na.rm = T)
                    })[2]) %>%
-  set_colnames(c("ID", "Percent_Sleep", "SEM")) %>%
+  set_colnames(c("patient_ID", "Percent_Sleep", "SEM")) %>%
   mutate(ymax = Percent_Sleep + SEM) %>%
   mutate(ymin = Percent_Sleep - SEM)
 
-ggplot(NSD_child, aes(x = ID, y = Percent_Sleep)) +
+ggplot(NSD_child, aes(x = patient_ID, y = Percent_Sleep)) +
   geom_bar(stat = "identity") +
   geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25)
 
+## ------ Percent Sleep/Social Jetlag ------
+
+## Need to filter out days with the watch off
+## --> Maybe I should just create a Major DF with these days filtered so I don't have to
+## do it in every analysis
+
+percent_sleep <- lapply(unique(actigraphy$patient_ID), function (ii) {
+  df <- actigraphy[actigraphy$patient_ID == ii, ]
+  spec <- as.data.frame.table(100 * prop.table(table(df$Date, df$Sleep_Wake), 1))
+  sleep <- cbind(spec, factor(ii))
+  
+  return(sleep)
+}) %>% 
+  do.call("rbind", .) %>%
+  data.frame(.) %>%
+  set_colnames(c('Date', 'Stage', 'Sleep', 'patient_ID')) %>%
+  filter(complete.cases(.)) %>%
+  mutate(Date = as.POSIXct(strptime(Date, format = "%F")),
+         Weekend = weekdays(Date),
+         Weekend = factor(ifelse(Weekend %in% c("Saturday", "Sunday"),
+                                 "Weekend", "Weekday")))
+
 ## ------ Bedtime ------
 
-sleep <- data.frame(do.call("rbind", lapply(unique(actigraphy$ID), function (ii) {
-  spec <- as.data.frame.table(100 * prop.table(table(actigraphy$Date[actigraphy$ID == ii],
-                                                     actigraphy$Sleep_Wake[actigraphy$ID == ii]), 1))
-  sleep <- cbind(spec, factor(ii))
-  return(sleep)
-}))) %>% 
-  set_colnames(c('Date', 'Stage', 'Sleep', 'ID')) %>%
-  filter(complete.cases(.)) %>%
-  mutate(Weekend = factor(chron::is.weekend(Date), levels = c(T,F),
-                          labels = c("Weekend", "Weekday")))
-  
+## Converts POSIX to decimal
+getTime <- function (x) {
+  if(!any(class(x) == "POSIXt")) stop("x must be POSIX")
+  tim <- as.numeric(x - trunc(x, "days"))
+  return(tim)
+}
+
+
+
 ## ------ KNN Sleep Stage Prediction ------
