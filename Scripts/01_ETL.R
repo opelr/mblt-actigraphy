@@ -169,7 +169,8 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
                                     DateTime > paste(Date, "21:59:59 PDT"),
                                     "Night", "Day")),
          log_Activity = log10(Activity),
-         log_Light = log10(Light))
+         log_Light = log10(Light),
+         Day = factor(Day, levels = unique(Day)))
 
 ## ------ Rolling Window & Off-Wrist Functions ------
 
@@ -227,7 +228,7 @@ zero_range <- function(x, tol = .Machine$double.eps ^ 0.5) {
 off_wrist_detector <- function(data) {
   df <- data
   
-  rle_values <- rle(df$No_Activity_Length)$lengths
+  rle_values <- rle(df$No_Activity_Change_Window)$lengths
   
   lst <- lapply(1:length(rle_values), function(ii) {
     
@@ -252,9 +253,9 @@ off_wrist_detector <- function(data) {
       
       change_bool <- df[elapsed_rows, "No_Activity_Change_Window"]
       
-      if (change_bool == TRUE & previous_value >= 30 & next_value >= 30) {
+      if (change_bool == TRUE & previous_value >= 35 & next_value >= 35) {
         out <- rep.int(FALSE, current_value)
-      } else if (change_bool == FALSE & previous_value >= 30 & next_value >= 30) {
+      } else if (change_bool == FALSE & previous_value >= 35 & next_value >= 35) {
         out <- rep.int(TRUE, current_value)
       } else {
         out <- rep.int(change_bool, current_value)
@@ -287,28 +288,54 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
       mutate(Lotjonen_nat = moving_window(., "Lotjonen_Counts", 23, 1,
                                           FUN = "sum", "center"),
              Off_Wrist = off_wrist_detector(.),
-             #### THIS IS WRONG
-             #### FIX IT
-             Lotjonen_Sleep = 1.687 + (0.003 * Activity) - (0.034 * Lotjonen_mean) -  #### THIS IS WRONG
-                              (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - 
-                              (0.127 * Lotjonen_ln))
+             Lotjonen_Sleep = 1.687 + (0.002 * Activity) - (0.034 * Lotjonen_mean) - 
+               (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - (0.127 * Lotjonen_ln),
+             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep > 0.5, "Sleep", "Wake")))
             
     return(ii)
-}) %>%
+  }) %>%
   do.call("rbind", .) %>%
-  set_rownames(1:nrow(.))
+  set_rownames(1:nrow(.)) %>%
+  dplyr::filter(!is.na(Activity))
 
+## ------ Sleep Agreement ------
+
+dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ] %>%
+  mutate(Sleep_Agree = apply(.[, c("Sleep", "Sleep_Wake", "Lotjonen_Sleep")],
+                           1, function(ii) {length(unique(unlist(ii))) == 1}))
+
+View(dat[, c("Activity", "Light", "DateTime", "Sleep", "Sleep_Wake", "Lotjonen_Sleep",
+        "Sleep_Agree", "No_Activity_Change_Window", "No_Activity_Length", "Off_Wrist")])
 ## ------ Smoothing Sleep ------
 
-# "Arousals lasting 3 minutes or less were rescored as sleep"
+# "Arousals lasting 3 minutes or less were rescored as sleep" - Jean-Louis et al
 
 ## ------ Cole Post-Processing ------
+
+## I need to decide on the appropriate sleep staging parameter before this can happen
 
 # 1) The sleep of 1, 3, or 4 minutes was rescored as wake if it preceded at least 4, 10, or 15 minutes of wake;
 # 2) the sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes of wake was rescored as wake.
 
-## ------ 
+## ------ Light Adherence ------
 
+### Count period where mean Light window > 10,000/5,000 across 15/30 epochs
+### How many of these bouts per day
+
+actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
+  lapply(., function(ii) {
+    ii %<>% 
+      mutate(
+        Light_mean_15 = moving_window(., "Light", 15, 1, FUN = "median", "center"),
+        Light_15_5k = Light_mean_15 >= 5000, 
+        Light_15_10k = Light_mean_15 >= 10000, 
+        Light_mean_30 = moving_window(., "Light", 31, 1, FUN = "median", "center"),
+        Light_30_5k = Light_mean_30 >= 5000,
+        Light_30_10k = Light_mean_30 >= 10000)
+    return(ii)
+  }) %>%
+  do.call("rbind", .) %>%
+  set_rownames(1:nrow(.))
 
 ## ------ Saving RDS ------
 
