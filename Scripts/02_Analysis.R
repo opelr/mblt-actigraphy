@@ -13,16 +13,19 @@ actigraphy <- readRDS(".\\Data\\actigraphy_data.rds")
 
 ## ------ Visualizing a single patient ------
 
-dat <- actigraphy[actigraphy$patient_ID == "Carolyn_Jones" & actigraphy$Day == "5", ]
+dat <- actigraphy[actigraphy$patient_ID == "Jon_Elliott" & actigraphy$Day == "11", ]
+
+dat <- actigraphy[actigraphy$patient_ID == "Carolyn_Jones",]
 
 ggplot(dat) +
-  geom_line(aes(x = Time, y = Light), color = "Orange") + 
+  # geom_line(aes(x = Time, y = Light), color = "Orange") + 
   geom_line(aes(x = Time, y = Activity), color = "Black") +
   scale_x_datetime(date_labels = "%I %p") + 
   # scale_y_log10() + 
   facet_grid(Day + DateAbbr ~ .)
 
-## ------ Percent Time Off-Wrist ------
+
+## ------ Off Wrist Filtering ------
 
 off_wrist <- as.data.frame.table(xtabs(~patient_ID + Off_Wrist + Day, data = actigraphy)) %>%
   reshape2::dcast(., formula = patient_ID + Day ~ Off_Wrist, value.var = "Freq") %>%
@@ -31,10 +34,19 @@ off_wrist <- as.data.frame.table(xtabs(~patient_ID + Off_Wrist + Day, data = act
          Total_Epochs = Watch_On + Watch_Off) %>%
   dplyr::filter(complete.cases(.))
 
-aggregate(Percent_Off ~ patient_ID, off_wrist, mean)
+actigraphy %<>% merge(., off_wrist[,c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")] %>% 
+               rename(Day = Day_number), by = c("patient_ID", "Day")) %>%
+  dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2))
 
-ggplot(off_wrist, aes(Day, Percent_Off, group = patient_ID, color = patient_ID)) + 
-  geom_line()
+## ------ Percent Time Off-Wrist ------
+
+percent_off_wrist <- aggregate(cbind(Watch_Off, Total_Epochs) ~ patient_ID,
+                               off_wrist, sum) %>%
+  mutate(Percent_Off = 100 * Watch_Off / Total_Epochs)
+
+ggplot(off_wrist, aes(Day_number, Percent_Off, group = patient_ID, color = patient_ID)) + 
+  geom_line(size = 1) +
+  facet_grid(patient_ID ~ .)
 
 ## ------ Daytime activity ratio (DAR) ------
 # taken from http://www.neurology.org/content/88/3/268.long
@@ -47,18 +59,16 @@ DAR_parent <- aggregate(Activity ~ patient_ID + DAR_Period + Day, actigraphy, me
   filter(complete.cases(.)) %>%
   # Use `off_wrist` to verify that watch is on and recording for most of the day
   merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
-        by = c("patient_ID", "Day_number")) %>%
-  dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2))
-
-## how do we deal with infinites?
+        by = c("patient_ID", "Day_number")) #%>%
+  # dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2))
 
 DAR_child <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
                    aggregate(DAR ~ patient_ID, DAR_parent, function(X) {
                      opelr::sem(X, na.rm = T)
                     })[2]) %>%
   set_colnames(c("patient_ID", "DAR", "SEM")) %>%
-  mutate(ymax = DAR + SEM) %>%
-  mutate(ymin = DAR - SEM)
+  mutate(ymax = DAR + SEM,
+         ymin = DAR - SEM)
 
 ggplot(DAR_child, aes(x = patient_ID, y = DAR)) +
   geom_bar(stat = "identity") +
@@ -77,26 +87,21 @@ NSD_parent <- aggregate(Line ~ patient_ID + Sleep_Wake + Day + DAR_Period,
   rename(Day_number = Day) %>%
   merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
         by = c("patient_ID", "Day_number")) %>%
-  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake))) %>%
-  dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2))
+  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake)))
 
 NSD_child <- cbind(aggregate(Percent_Sleep ~ patient_ID, NSD_parent, mean),
                    aggregate(Percent_Sleep ~ patient_ID, NSD_parent, function(X) {
                      opelr::sem(X, na.rm = T)
                    })[2]) %>%
   set_colnames(c("patient_ID", "Percent_Sleep", "SEM")) %>%
-  mutate(ymax = Percent_Sleep + SEM) %>%
-  mutate(ymin = Percent_Sleep - SEM)
+  mutate(ymax = Percent_Sleep + SEM,
+         ymin = Percent_Sleep - SEM)
 
 ggplot(NSD_child, aes(x = patient_ID, y = Percent_Sleep)) +
   geom_bar(stat = "identity") +
   geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25)
 
 ## ------ Percent Sleep/Social Jetlag ------
-
-## Need to filter out days with the watch off
-## --> Maybe I should just create a Major DF with these days filtered so I don't have to
-## do it in every analysis
 
 percent_sleep <- lapply(unique(actigraphy$patient_ID), function (ii) {
   df <- actigraphy[actigraphy$patient_ID == ii, ]
@@ -113,6 +118,17 @@ percent_sleep <- lapply(unique(actigraphy$patient_ID), function (ii) {
          Weekend = weekdays(Date),
          Weekend = factor(ifelse(Weekend %in% c("Saturday", "Sunday"),
                                  "Weekend", "Weekday")))
+
+percent_sleep_agg <- merge(aggregate(Sleep ~ patient_ID + Stage + Weekend, percent_sleep, mean),
+                           aggregate(Sleep ~ patient_ID + Stage + Weekend, percent_sleep, opelr::sem) %>%
+                             rename(SEM = Sleep),
+                           by = c("patient_ID", "Stage", "Weekend")) %>%
+  mutate(ymax = Sleep + SEM,
+         ymin = Sleep - SEM) %>%
+  dplyr::filter(Stage == "Sleep")
+
+ggplot(percent_sleep, aes(patient_ID, Sleep)) + 
+  geom_bar(aes(fill = Weekend), stat = "identity", position = "dodge")
 
 ## ------ Bedtime ------
 
