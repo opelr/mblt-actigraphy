@@ -341,3 +341,31 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 
 saveRDS(acti_files, ".\\Data\\actigraphy_header.rds")
 saveRDS(actigraphy, ".\\Data\\actigraphy_data.rds")
+
+
+## ------ Noon-Noon ------
+noon <- data.frame(Day = rep(1:4, each = 4), Hour = rep(c(1, 4, 13, 18), 4),
+                   AM_PM = rep(c("AM", "AM", "PM", "PM"), 4)) %>%
+  mutate(Comb = factor(paste0(Day, AM_PM)))
+
+
+levels(noon$Comb)
+
+lapply(unique(noon$Day), function(ii) {
+  next_day = ii + 1
+  
+  if
+  
+  
+})
+
+
+
+noon_check <- function(day, AM) {
+  if(day == 1 & AM == "AM") {return(1)}
+  
+  out <- ifelse(AM == "PM", day+1, day)
+  
+  return(out)
+}
+
