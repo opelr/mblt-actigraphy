@@ -1,0 +1,599 @@
+---
+title: "Miranda's Actiwatch"
+author: "Ryan Opel"
+date: "2017-01-06 -- v0.2.0"
+header-includes:
+   - \usepackage{booktabs}
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(car)
+library(chron)
+library(ggplot2)
+library(sciplot)
+library(magrittr)
+library(reshape2)
+library(timeDate)
+library(tidyverse)
+```
+
+Numerous lab members have been alternating wearing both the [Philips Actiwatch 2](http://www.usa.philips.com/healthcare/product/HC1044809/actiwatch-2-activity-monitor) and [Actiwatch Spectrum](http://www.usa.philips.com/healthcare/product/HC1046964/actiwatch-spectrum-activity-monitor) activity monitors on their wrists for the past couple weeks -- standard-issue in the sleep clinic.
+
+The two models are similar in function and share the same main features -- both models claim to reliably track sleep and produce quantifiable physical activity data, and both include an "event marker button" for arbitrary moments of significance. However, the biggest difference is that the Spectrum records light in three distinct wavelengths (R, G, B) whereas the Actiwatch 2 only records white light. Smaller differences include size/weight, battery life, and removal detection.
+
+In this script, I would like to compare the activity monitoring of the two models and investigate how the Spectrum and 2 handle light. Moreover, I'll make some inferences about lab members daily habits
+
+## Initializing {.tabset .tabset-fade .tabset-pills}
+
+### Defining Functions
+```{r functions, echo=T}
+sunset <- function(city, state = "OR", year) {
+  link <- paste0("http://aa.usno.navy.mil/cgi-bin/aa_rstablew.pl?ID=AA&year=", year,
+                 "&task=0&state=", state, "&place=", city)
+  
+  sun <- readLines(link)
+  
+  times <- lapply(32:60, function(ii) (strsplit(sun[ii], "  ")[[1]]))
+}
+
+readAct <- function(file, watch_model, ID) {
+  if (watch_model == "Act2") {
+    cols <- 8
+  } else if (watch_model == "Spec") {
+    cols <- 12
+  } else {stop("Watch model passed is not one of the known types")}
+
+  dat <- read.csv(file = file)
+  ep_head <- which(dat[, 1] %in% "-------------------- Epoch-by-Epoch Data -------------------")
+  dat_head <- which(dat[ep_head:nrow(dat), 1] %in% "Line")
+  extra <- which(read.csv(file, skip = ep_head + dat_head)[1] == 1) - 1
+  
+  
+  dat <- read.csv(file = file, skip = ep_head + dat_head + extra)[1:cols]
+  
+  
+  ## column names and reordering
+  act_cols  <- c('Epoch', 'Date', 'Time', 'Activity', 'Marker',
+                    'White', 'Sleep', 'Active')
+  spec_cols <- c('Epoch', 'Date', 'Time', 'Off_wrist', 'Activity',
+                    'Marker', 'White', 'Red', 'Green',
+                    'Blue','Sleep', 'Active')
+  back_cols <- spec_cols[!spec_cols %in% act_cols]
+  
+  if(ncol(dat) == 8) {
+    colnames(dat) <- act_cols
+    dat[, back_cols] <- NA
+  } else if (ncol(dat) == 12) {
+    colnames(dat) <- spec_cols
+    dat <- dat[, c(act_cols, back_cols)]
+  }
+  
+  dat$ID <- ID
+  dat$Model <- watch_model
+  
+  return(dat)
+}
+```
+
+### Repository
+```{r repo, echo=T}
+path <- "D:\\data\\acquired_data\\human\\other\\actiwatch\\"
+fil  <- data.frame(filepath = list.files(path, pattern = "(.*)[.]csv", recursive = T))
+fil$ID <- gsub("/(.*)", "", fil$filepath)
+fil$rootpath <- normalizePath(paste0(path, fil$filepath))
+fil$model <- gsub("(.*)/(.*)_(.*)_Aurora[.]csv", "\\3", fil$filepath)
+fil$Date  <- gsub("(.*)/(.*)/(.*)", "\\2", fil$filepath) 
+
+## Removing duplicated data
+fil <- fil[!grepl("deprecated", fil$rootpath) & fil$ID != "elliott_jon", ]
+```
+
+### Building Main Data Frame
+```{r build_df, echo=T}
+wat <- do.call("rbind", lapply(fil$filepath, function(ii) {
+  readAct(file = fil$rootpath[fil$filepath == ii],
+          watch_model = fil$model[fil$filepath == ii],
+          ID = fil$ID[fil$filepath == ii])
+}))
+
+
+## 'Watch' df for comparing Actiwatch2 to Spectrum
+uniqueCols <- c('Activity', 'Marker', 'White', 'Sleep', 'Active',
+                'Off_wrist', 'Red', 'Green', 'Blue', 'Model')
+
+acti <- split(wat, wat$Model)$Act2
+acti_cols <- colnames(acti)[colnames(acti) %in% uniqueCols]
+colnames(acti)[which(colnames(acti) %in% acti_cols)] <- paste0(acti_cols, "_acti")
+
+spec <- split(wat, wat$Model)$Spec
+spec_cols <- colnames(spec)[colnames(spec) %in% uniqueCols]
+colnames(spec)[which(colnames(spec) %in% spec_cols)] <- paste0(spec_cols, "_spec")
+
+watch <- merge(acti, spec, by = c('Date', 'Time', 'ID'))
+```
+
+### Time Calculations
+```{r time_calcs, echo=T}
+watch$DateTime <- strptime(x = paste(watch$Date, watch$Time),
+                           format = "%m/%d/%Y %I:%M:%S %p")
+watch <- watch[order(watch$DateTime), ]
+watch$Epoch.x <- watch$Epoch.y <- NULL
+watch$Epoch <- 1:nrow(watch)
+watch$Day   <- sapply(watch$Date, function(ii) which(ii == unique(watch$Date)))
+watch$Hour  <- as.numeric(substr(watch$DateTime, 12, 13))
+watch$Noon  <- factor(floor(watch$Hour/12), levels = 0:1, labels = c('Morning', 'Afternoon'))
+watch$Sleep_acti <- factor(watch$Sleep_acti, levels = 0:1,
+                           labels = c('Sleep', 'Wake'))
+watch$Sleep_spec <- factor(watch$Sleep_spec, levels = 0:1,
+                           labels = c('Sleep', 'Wake'))
+rownames(watch) <- 1:nrow(watch)
+```
+
+## Actiwatch Software Image Outputs{.tabset .tabset-fade .tabset-pills}
+
+### Actiwatch2
+![](Images/include/MLim_01_06_2017_Act2_Aurora.PNG)
+
+### Spectrum
+![](Images/include/MLim_01_06_2017_Spec_Aurora.PNG)
+
+## Activity Overview {.tabset .tabset-fade .tabset-pills}
+
+### Overall Activity {.tabset .tabset-fade}
+
+#### Comparison
+```{r activity_comparison, warning=F, message=F}
+watch_melt <- rbind(cbind("Act2", watch$Activity_acti, as.character(watch$DateTime)),
+                    cbind("Spec", watch$Activity_spec, as.character(watch$DateTime)))
+colnames(watch_melt) <- c('ID', 'Activity', 'Time')
+watch_melt <- data.frame(watch_melt)
+watch_melt$Time <- as.POSIXlt(watch_melt$Time)
+watch_melt$Epoch <- rep(1:(nrow(watch_melt)/2), 2)
+watch_melt$Activity <- as.numeric(as.character(watch_melt$Activity))
+
+ggplot(watch_melt, aes(Time, Activity, color = ID)) +
+  geom_line(alpha = 0.5) +
+  labs(x = "", title = "Comparison of Act2 & Spec Actigraphy") +
+  scale_x_datetime(date_breaks = "3 days", date_labels = "%b %d")
+```
+
+#### Difference
+For this plot, positive values indicate that the Actiwatch 2 was reading higher activity than the Spectrum.
+
+```{r activity_diff, warning=F, message=F}
+watch$Activity_diff <- watch$Activity_acti - watch$Activity_spec
+
+ggplot(watch, aes(DateTime, Activity_diff)) +
+  geom_line() +
+  labs(x = "", y="Difference", title = "Difference of Act2 & Spec Actigraphy") +
+  scale_x_datetime(date_breaks = "3 days", date_labels = "%b %d")
+```
+
+### Activity during Rest
+How much do the watches differ during periods of rest? Perhaps the different wrist placement could affect the activity readings seen above, but my thinking is that during periods of low activity the readings should be more similar.
+
+Considering the average activity reading is around 20 during periods the watches are scoring as "Active", these deflections do not seem noteworthy.
+
+```{r rest_comparison, warning=F, message=F}
+ggplot(watch[watch$Active_acti != "ACTIVE" & watch$Active_spec != "ACTIVE", ],
+       aes(DateTime, Activity_diff)) +
+  geom_line() +
+  labs(x = "", y="Difference", title = "Difference of Act2 & Spec Actigraphy during Rest")
+```
+
+### Staging {.tabset .tabset-fade}
+How much do the two watches agree on state of sleep and activity?
+
+```{r staging}
+watch$stage_agreement <- as.character(watch$Active_acti) ==
+                         as.character(watch$Active_spec)
+watch$sleep_agreement <- as.character(watch$Sleep_acti) ==
+                         as.character(watch$Sleep_spec)
+```
+
+#### Activity 
+
+~98% agreement for Miranda (2016-12-21 -- 2017-01-04)
+
+```{r active_jitter}
+agree <- 100 * signif(sum(watch$stage_agreement)/nrow(watch), 3)
+ggplot(watch, aes(DateTime, stage_agreement)) +
+  geom_jitter() +
+  labs(title = paste0(agree, "% Agreement -- Activity")) +
+  scale_x_datetime(date_breaks = "3 days", date_labels = "%b %d")
+```
+
+#### Sleeping 
+```{r sleep_jitter}
+agree <- 100 * signif(sum(watch$sleep_agreement, na.rm = T)/nrow(watch), 3)
+ggplot(watch, aes(DateTime, sleep_agreement)) +
+  geom_jitter() +
+  labs(title = paste0(agree, "% Agreement -- Sleep")) +
+  scale_x_datetime(date_breaks = "3 days", date_labels = "%b %d")
+```
+
+
+## Light Overview {.tabset .tabset-fade .tabset-pills}
+
+### Overall Photometery {.tabset .tabset-fade}
+
+In this tab, I'm removing outliers.
+
+#### Comparison
+```{r light_comparison_outliers, warning=F, message=F}
+light_melt <- rbind(cbind("Act2", watch$White_acti, as.character(watch$DateTime)),
+                    cbind("Spec", watch$White_spec, as.character(watch$DateTime)))
+colnames(light_melt) <- c('ID', 'Light', 'Time')
+light_melt <- data.frame(light_melt)
+light_melt$Time <- as.POSIXlt(light_melt$Time)
+light_melt$Epoch <- rep(1:(nrow(light_melt)/2), 2)
+light_melt$Light <- as.numeric(as.character(light_melt$Light))
+
+outlier <- names(outlierTest(lm(Light ~ ID, light_melt), n.max = 100)$rstudent)
+
+out <- light_melt[!rownames(light_melt) %in% outlier, ]
+
+ggplot(out, aes(Time, Light, color = ID)) +
+  geom_line(alpha = 0.5) +
+  labs(x = "", title = "Comparison of Act2 & Spec Photometery -- Outliers Removed") +
+  scale_x_datetime(date_breaks = "3 days", date_labels = "%b %d")
+```
+
+#### Difference
+Positive values indicate that the Actiwatch 2 was reading higher than the Spectrum.
+
+```{r light_diff_outliers, warning=F, message=F}
+watch$Light_diff <- watch$White_acti - watch$White_spec
+
+outlier <- names(outlierTest(lm(Light_diff ~ Day, watch), n.max = 100)$rstudent)
+
+out <- watch[!rownames(watch) %in% outlier, ]
+
+ggplot(out, aes(DateTime, Light_diff)) +
+  geom_line() +
+  labs(x = "", y="Difference",
+       title = "Difference of Act2 & Spec Photometery -- Outliers Removed") +
+  scale_x_datetime(date_breaks = "3 days", date_labels = "%b %d")
+```
+
+
+### Lux during Rest
+How much do the watches differ during periods of rest? Again, perhaps the different wrist placements could affect the photometery readings seen above, but my thinking is that during periods of low activity (i.e. lights off) the readings should be more similar.
+
+Virtually no difference -- only 23 epochs where absolute difference between the two devices is >= 1. 
+
+_Note: Actiwatch2 idles at 0.05, where the Spectrum idles at 0._
+
+```{r rest_comparison_light, warning=F, message=F}
+ggplot(watch[watch$Active_acti != "ACTIVE" & watch$Active_spec != "ACTIVE", ],
+       aes(DateTime, Light_diff)) +
+  geom_line() +
+  labs(x = "", y="Difference", title = "Difference of Act2 & Spec Photometery during Rest") +
+  scale_x_datetime(date_breaks = "3 days", date_labels = "%b %d")
+```
+
+## Inferences {.tabset .tabset-pills .tabset-fade}
+
+### Sleep {.tabset .tabset-fade}
+
+#### Percent of Day
+No differences in watches! Also Miranda doesn't sleep more over the weekends.
+
+```{r miranda_sleep}
+sleep <- data.frame(do.call("rbind", lapply(unique(watch$ID), function (ii) {
+  act  <- as.data.frame.table(100 * prop.table(table(watch$Date[watch$ID == ii],
+                                                     watch$Sleep_acti[watch$ID == ii]), 1))
+  act$Watch <- factor("Act2")
+  spec <- as.data.frame.table(100 * prop.table(table(watch$Date[watch$ID == ii],
+                                                     watch$Sleep_spec[watch$ID == ii]), 1))
+  spec$Watch <- factor("Spec")
+  
+  sleep <- cbind(rbind(act, spec), factor(ii))
+  
+  return(sleep)
+})))
+
+
+sleep %<>% set_colnames(c('Date', 'Stage', 'Sleep', 'Watch', 'ID')) %>%
+  filter(complete.cases(.)) %>%
+  mutate(Weekend = factor(isWeekend(strptime(Date, format = "%m/%d/%Y",
+                                             tz = "America/Los_Angeles")),
+                        levels = c(T,F), labels = c("Weekend", "Week")))
+
+bargraph.CI(Weekend, response = Sleep, data = sleep[sleep$Stage == "Sleep", ],
+            main = "% of day Miranda spends sleeping",
+            legend = T, ylab = "Percent of day");abline(0,0)
+
+# anova(lm(Sleep ~ Weekend*ID, sleep[sleep$Stage == "Sleep", ]))
+```
+
+
+#### Bedtime
+
+```{r bedtime}
+watch$stage_agreement <- factor(ifelse(as.character(watch$Active_acti) ==
+                         as.character(watch$Active_spec),
+                         as.character(watch$Active_acti), FALSE))
+watch$sleep_agreement <- factor(ifelse(as.character(watch$Sleep_acti) ==
+                         as.character(watch$Sleep_spec),
+                         as.character(watch$Sleep_acti), FALSE))
+
+## Converts POSIX to decimal
+getTime <- function (x) {
+  if(!any(class(x) == "POSIXt")) stop("x must be POSIX")
+  tim <- as.numeric(x - trunc(x, "days"))
+  return(tim)
+}
+# 
+# bedtime <- do.call("rbind", sapply(unique(watch$Day), function (ii) {
+#   
+#   if (nrow(watch[watch$Day == ii & watch$Noon == "Afternoon", ]) > 1) {
+#     sl <- watch[watch$Day == ii & watch$Noon == "Afternoon", ]
+#     
+#     x <- data.frame(unclass(rle(as.integer(sl$sleep_agreement))))
+#     x$index <- cumsum(c(1, x$lengths[-length(x$lengths)]))
+#     x$values <- levels(sl$sleep_agreement)[x$values]
+#     x$Time <- sl$DateTime[x$index]
+#     # x <- x[complete.cases(x),]
+#     x$Hour <- as.integer(substr(x$Time, 12, 13))
+#     
+#     if(any(is.na(x$values))) {
+#       x <- x[!is.na(x$values), ]
+#     }
+#     
+#     maxBedtime <- x$Time[x$lengths == max(x$lengths[x$values == "Sleep"])]
+#     
+#     xx <- x[x$values == "Sleep" & x$Hour > 19, ]
+#     probBedtime <- xx$Time[which(xx$lengths >= 10)][1]
+#     
+#     if(length(maxBedtime) > 1) {maxBedtime <- maxBedtime[length(maxBedtime)]}
+#     
+#     return(data.frame(Day = ii, maxBedtime = maxBedtime, probBedtime = probBedtime,
+#                ConsecEpochs = max(x$lengths[x$values == "Sleep"])))
+#   }
+#   
+# }))
+
+
+bedtime <- do.call("rbind", sapply(unique(watch$Day), function(day, ID) {
+  
+  if (nrow(watch[watch$Day == day & watch$Noon == "Afternoon" & watch$ID == ID, ]) > 1) {
+    sl <-  watch[watch$Day == day & watch$Noon == "Afternoon" & watch$ID == ID, ]
+    
+    x <- data.frame(unclass(rle(as.integer(sl$sleep_agreement))))
+    
+    if(sum(is.na(x$values)) > (length(x$values) / 3)) {
+      
+    } else {
+      
+      x$index <- cumsum(c(1, x$lengths[-length(x$lengths)]))
+      x$values <- levels(sl$sleep_agreement)[x$values]
+      x$Time <- sl$DateTime[x$index]
+      # x <- x[complete.cases(x),]
+      x$Hour <- as.integer(substr(x$Time, 12, 13))
+      
+      if(any(is.na(x$values))) {
+        x <- x[!is.na(x$values), ]
+      }
+      
+      maxBedtime <- x$Time[x$lengths == max(x$lengths[x$values == "Sleep"])]
+      
+      xx <- x[x$values == "Sleep" & x$Hour > 19, ]
+      probBedtime <- xx$Time[which(xx$lengths >= 10)][1]
+      
+      if(length(maxBedtime) > 1) {maxBedtime <- maxBedtime[length(maxBedtime)]}
+      
+      return(data.frame(ID = ID, Day = day, maxBedtime = maxBedtime, probBedtime = probBedtime,
+                 ConsecEpochs = max(x$lengths[x$values == "Sleep"])))
+    }
+    
+    
+  }
+  
+}, ID= unique(watch$ID)))
+
+
+
+
+bedtime$Weekend <- factor(ifelse(isWeekday(bedtime$maxBedtime), "Weekday", "Weekend"))
+
+bedtime$maxNoDay <- strptime(substr(bedtime$maxBedtime, 12, 20), "%T")
+bedtime$probNoDay <- strptime(substr(bedtime$probBedtime, 12, 20), "%T")
+bedtime$dayOfWeek <- factor(weekdays(bedtime$maxBedtime),
+                            levels = rev(c('Sunday', 'Monday', 'Tuesday', 'Wednesday',
+                                       'Thursday', 'Friday', 'Saturday')))
+bedtime$bedDecimal <- getTime(bedtime$maxNoDay)
+
+## Model: Does sleep differ on weekends?
+mod <- anova(lm(bedDecimal ~ Weekend, bedtime))
+p <- signif(mod$`Pr(>F)`[1], 3)
+F.val <- signif(mod$`F value`[1], 3)
+
+## Plotting
+ggplot(bedtime, aes(maxNoDay, dayOfWeek, color = Weekend)) +
+  geom_point() +
+  scale_x_datetime(date_breaks = "1 hour",
+                   date_labels = "%I:%M %p") +
+  labs(x = "Hour", title = paste0("Miranda's Bedtime, (p=", p, ", F=", F.val, ")"))
+
+```
+
+#### Wake Time
+
+```{r wake-time}
+waketime <- do.call("rbind", sapply(unique(watch$Day), function (ii) {
+  
+  if (nrow(watch[watch$Day == ii & watch$Noon == "Morning", ]) > 1) {
+    sl <- watch[watch$Day == ii & watch$Noon == "Morning", ]
+    
+    if(any(is.na(sl$sleep_agreement))) {
+      sl <- sl[!is.na(sl$sleep_agreement), ]
+    }
+    
+    x <- data.frame(unclass(rle(as.integer(sl$sleep_agreement))))
+    x$index <- cumsum(c(1, x$lengths[-length(x$lengths)]))
+    x$values <- levels(sl$sleep_agreement)[x$values]
+    x$Time <- sl$DateTime[x$index]
+    # x <- x[complete.cases(x),]
+    x$Hour <- as.integer(substr(x$Time, 12, 13))
+    
+    waketime <- x$Time[x$lengths == max(x$lengths[x$values == "Wake"])]
+    
+    return(data.frame(Day = ii, wakeTime = waketime, ConsecEpochs = x$lengths[nrow(x)]))
+  }
+  
+}))
+
+waketime$Weekend <- factor(ifelse(isWeekday(waketime$wakeTime), "Weekday", "Weekend"))
+
+waketime$wakeNoDay <- strptime(substr(waketime$wakeTime, 12, 20), "%T")
+waketime$dayOfWeek <- factor(weekdays(waketime$wakeTime),
+                            levels = rev(c('Sunday', 'Monday', 'Tuesday', 'Wednesday',
+                                       'Thursday', 'Friday', 'Saturday')))
+waketime$wakeDecimal <- getTime(waketime$wakeNoDay)
+
+## Model: Does sleep differ on weekends?
+mod <- anova(lm(wakeDecimal ~ Weekend, waketime))
+p <- signif(mod$`Pr(>F)`[1], 3)
+F.val <- signif(mod$`F value`[1], 3)
+
+
+ggplot(waketime, aes(wakeNoDay, dayOfWeek, color = Weekend)) +
+  geom_point() +
+  scale_x_datetime(date_breaks = "1 hour",
+                   date_labels = "%I:%M %p") +
+  labs(x = "Hour", title = paste0("Miranda's Waketime, (p = ", p, ", F = ", F.val, ")"))
+```
+
+#### Average Bed/Wake Time
+```{r avg_bed_wake}
+# avgWake <- chron::times(mean(getTime(waketime$wakeTime)/24))
+# avgSleep  <- chron::times(mean(getTime(bedtime$maxBedtime)/24))
+# 
+# avgBed <- data.frame(Wake = c("Bedtime", "Wake"), Time = c(avgSleep, avgWake))
+# avgBed$Group <- "Miranda"
+# avgBed$Time <- as.POSIXct(as.character(avgBed$Time), format = "%T", tz="America/Los_Angeles")
+# avgBed$Time[avgBed$Wake=="Wake"] <- avgBed$Time[avgBed$Wake=="Wake"] + (60*24*60)
+
+avgWake  <- mean(getTime(waketime$wakeTime)/24)
+semWake  <- se(getTime(waketime$wakeTime)/24)
+avgSleep <- mean(getTime(bedtime$maxBedtime)/24)
+semSleep <- se(getTime(bedtime$maxBedtime)/24)
+
+avgBed <- data.frame(Wake = c("Bedtime", "Wake"), Time = c(avgSleep, avgWake),
+                     SEM = c(semSleep, semWake))
+avgBed$upper <- avgBed$Time + avgBed$SEM
+avgBed$lower <- avgBed$Time - avgBed$SEM
+avgBed[, 2:5] <- lapply(avgBed[, 2:5], function(x) chron::times(x))
+avgBed[, 2:5] <- lapply(avgBed[, 2:5], function(ii) {
+  as.POSIXct(as.character(ii), format = "%T", tz="America/Los_Angeles")
+})
+avgBed[avgBed$Wake=="Wake", 2:5] <- avgBed[avgBed$Wake=="Wake", 2:5] + (60*24*60)
+avgBed$Group <- "Miranda"
+
+ggplot(avgBed, aes(Time, Group, color = Wake)) +
+  geom_point() +
+  scale_x_datetime(date_breaks = "1 hours",
+                   date_labels = "%H:%M") +
+  geom_errorbarh(aes(xmax = upper, xmin = lower), height = 0.1)
+```
+
+
+### Light Exposure {.tabset .tabset-fade}
+
+In this tab, I'm removing the 20 most extreme outliers (same as _Light Overview > Photometery_ above)
+
+#### Actiwatch2
+```{r light_exposure_act2}
+outlier <- names(outlierTest(lm(White_acti ~ Hour, watch), n.max = 20)$rstudent)
+
+out <- watch[!rownames(watch) %in% outlier, ]
+
+light_expos <- cbind(aggregate(White_acti ~ Hour, out, mean),
+                     aggregate(White_acti ~ Hour, out, se)[2])
+colnames(light_expos) <- c('Hour', 'mean', 'sem')
+light_expos$Percent <- 100 * light_expos$mean/sum(light_expos$mean)
+light_expos$ymax <- 100 * with(light_expos, mean + sem)/sum(light_expos$mean)
+light_expos$ymin <- 100 * with(light_expos, mean - sem)/sum(light_expos$mean)
+
+ggplot(light_expos, aes(Hour, Percent)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.4) +
+  labs(y = "% Light Exposure",
+       title = "Avg. % Daily Light Exposure by Hour -- Actiwatch2 (Outliers Removed)") +
+  coord_cartesian(ylim = c(0,20))
+```
+
+#### Spectrum
+```{r light_exposure_spec}
+outlier <- names(outlierTest(lm(White_spec ~ Hour, watch), n.max = 20)$rstudent)
+
+out <- watch[!rownames(watch) %in% outlier, ]
+
+light_expos <- cbind(aggregate(White_spec ~ Hour, out, mean),
+                     aggregate(White_spec ~ Hour, out, se)[2])
+colnames(light_expos) <- c('Hour', 'mean', 'sem')
+light_expos$Percent <- 100 * light_expos$mean/sum(light_expos$mean)
+light_expos$ymax <- 100 * with(light_expos, mean + sem)/sum(light_expos$mean)
+light_expos$ymin <- 100 * with(light_expos, mean - sem)/sum(light_expos$mean)
+
+ggplot(light_expos, aes(Hour, Percent)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.4) +
+  labs(y = "% Light Exposure",
+       title = "Avg. % Daily Light Exposure by Hour -- Spectrum (Outliers Removed)") +
+  coord_cartesian(ylim = c(0,20))
+```
+
+## Notes to self
+- Want to get sunrise/sunset data from 'sunset' function
+- normalize actigraphy and light
+- hourly lux exposure (not relative units, absolute)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
