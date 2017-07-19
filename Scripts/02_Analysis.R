@@ -123,6 +123,104 @@ getTime <- function (x) {
   return(tim)
 }
 
+find_bedtime <- function(day, ID, data, sleep_column) {
+  df <- data %>%
+    dplyr::filter(patient_ID == ID & (Day == day & AM_PM == "PM") | (Day == day + 1 & AM_PM == "AM"))
+  
+  sleep <- data.frame(unclass(rle(as.character(df[, sleep_column])))) %>%
+    mutate(
+      Index = cumsum(c(1, lengths[-length(lengths)])),
+      Time = df[, "DateTime"][Index]
+    )
+}
+
+bedtime <- do.call("rbind", sapply(unique(watch$Day), function (ii) {
+  if (nrow(watch[watch$Day == ii & watch$Noon == "Afternoon", ]) > 1) {
+    sl <- watch[watch$Day == ii & watch$Noon == "Afternoon", ]
+
+    x <- data.frame(unclass(rle(as.integer(sl$sleep_agreement))))
+    x$index <- cumsum(c(1, x$lengths[-length(x$lengths)]))
+    x$values <- levels(sl$sleep_agreement)[x$values]
+    x$Time <- sl$DateTime[x$index]
+    # x <- x[complete.cases(x),]
+    x$Hour <- as.integer(substr(x$Time, 12, 13))
+
+    if(any(is.na(x$values))) {
+      x <- x[!is.na(x$values), ]
+    }
+
+    maxBedtime <- x$Time[x$lengths == max(x$lengths[x$values == "Sleep"])]
+
+    xx <- x[x$values == "Sleep" & x$Hour > 19, ]
+    probBedtime <- xx$Time[which(xx$lengths >= 10)][1]
+
+    if(length(maxBedtime) > 1) {maxBedtime <- maxBedtime[length(maxBedtime)]}
+
+    return(data.frame(Day = ii, maxBedtime = maxBedtime, probBedtime = probBedtime,
+               ConsecEpochs = max(x$lengths[x$values == "Sleep"])))
+  }
+
+}))
+
+bedtime <- do.call("rbind", sapply(unique(actigraphy$Day), function(day, patient_ID) {
+  
+  if (nrow(actigraphy[actigraphy$Day == day & actigraphy$Noon == "Afternoon" & actigraphy$patient_ID == patient_ID, ]) > 1) {
+    sl <-  actigraphy[actigraphy$Day == day & actigraphy$Noon == "Afternoon" & actigraphy$patient_ID == patient_ID, ]
+    
+    x <- data.frame(unclass(rle(as.integer(sl$sleep_agreement))))
+    
+    if(sum(is.na(x$values)) > (length(x$values) / 3)) {
+      
+  } else {
+    
+    x$index <- cumsum(c(1, x$lengths[-length(x$lengths)]))
+    x$values <- levels(sl$sleep_agreement)[x$values]
+    x$Time <- sl$DateTime[x$index]
+    # x <- x[complete.cases(x),]
+    x$Hour <- as.integer(substr(x$Time, 12, 13))
+    
+    if(any(is.na(x$values))) {
+      x <- x[!is.na(x$values), ]
+    }
+    
+    maxBedtime <- x$Time[x$lengths == max(x$lengths[x$values == "Sleep"])]
+    
+    xx <- x[x$values == "Sleep" & x$Hour > 19, ]
+    probBedtime <- xx$Time[which(xx$lengths >= 10)][1]
+    
+    if(length(maxBedtime) > 1) {maxBedtime <- maxBedtime[length(maxBedtime)]}
+    
+    return(data.frame(patient_ID = patient_ID, Day = day, maxBedtime = maxBedtime, probBedtime = probBedtime,
+                      ConsecEpochs = max(x$lengths[x$values == "Sleep"])))
+  }
+    
+    
+}}, ID= unique(actigraphy$patient_ID)))
+
+
+# ===---===---===---====----====----====----====---
+
+
+bedtime$Weekend <- factor(ifelse(isWeekday(bedtime$maxBedtime), "Weekday", "Weekend"))
+
+bedtime$maxNoDay <- strptime(substr(bedtime$maxBedtime, 12, 20), "%T")
+bedtime$probNoDay <- strptime(substr(bedtime$probBedtime, 12, 20), "%T")
+bedtime$dayOfWeek <- factor(weekdays(bedtime$maxBedtime),
+                            levels = rev(c('Sunday', 'Monday', 'Tuesday', 'Wednesday',
+                                           'Thursday', 'Friday', 'Saturday')))
+bedtime$bedDecimal <- getTime(bedtime$maxNoDay)
+
+## Model: Does sleep differ on weekends?
+mod <- anova(lm(bedDecimal ~ Weekend, bedtime))
+p <- signif(mod$`Pr(>F)`[1], 3)
+F.val <- signif(mod$`F value`[1], 3)
+
+## Plotting
+ggplot(bedtime, aes(maxNoDay, dayOfWeek, color = Weekend)) +
+  geom_point() +
+  scale_x_datetime(date_breaks = "1 hour",
+                   date_labels = "%I:%M %p") +
+  labs(x = "Hour", title = paste0("Miranda's Bedtime, (p=", p, ", F=", F.val, ")"))
 
 
 ## ------ KNN Sleep Stage Prediction ------
