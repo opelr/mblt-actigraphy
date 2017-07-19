@@ -269,6 +269,8 @@ off_wrist_detector <- function(data) {
 
 ## ------ Lotjonen Parameters & Off-Wrist Detection ------
 
+ii <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ]
+
 actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
@@ -290,8 +292,18 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
              Off_Wrist = off_wrist_detector(.),
              Lotjonen_Sleep = 1.687 + (0.002 * Activity) - (0.034 * Lotjonen_mean) - 
                (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - (0.127 * Lotjonen_ln),
-             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep > 0.5, "Sleep", "Wake")))
-            
+             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep > 0.5, "Sleep", "Wake")),
+             Noon_Date = factor(date(DateTime + hours(12))))
+    
+    which_day_date <- table(ii[, "Day"], ii[, "Date"]) %>%
+      as.data.frame.table(.) %>%
+      dplyr::filter(Freq > 0) %>%
+      rename(Noon_Day = Var1, Noon_Date = Var2) %>%
+      dplyr::select(-Freq)
+    
+    ii %<>% merge(., which_day_date, by = "Noon_Date") %>%
+      select(-Noon_Date)
+    
     return(ii)
   }) %>%
   do.call("rbind", .) %>%
@@ -341,31 +353,3 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 
 saveRDS(acti_files, ".\\Data\\actigraphy_header.rds")
 saveRDS(actigraphy, ".\\Data\\actigraphy_data.rds")
-
-
-## ------ Noon-Noon ------
-noon <- data.frame(Day = rep(1:4, each = 4), Hour = rep(c(1, 4, 13, 18), 4),
-                   AM_PM = rep(c("AM", "AM", "PM", "PM"), 4)) %>%
-  mutate(Comb = factor(paste0(Day, AM_PM)))
-
-
-levels(noon$Comb)
-
-lapply(unique(noon$Day), function(ii) {
-  next_day = ii + 1
-  
-  if
-  
-  
-})
-
-
-
-noon_check <- function(day, AM) {
-  if(day == 1 & AM == "AM") {return(1)}
-  
-  out <- ifelse(AM == "PM", day+1, day)
-  
-  return(out)
-}
-
