@@ -269,45 +269,55 @@ off_wrist_detector <- function(data, threshold) {
 
 ## ------ Smooth Sleep Function ------
 
+data <- dplyr::filter(actigraphy, patient_ID == "Ryan_Opel")
+column <- "Sleep_Wake"
+
 smooth_sleep <- function(data, column) {
   ## Internal functions
   get_rle_df <- function(x) {
     data.frame(Values = rle(as.character(x))$values,
                Lengths = rle(as.character(x))$lengths)
   }
+  
   rle_df_to_vector <- function(df) {rep(df$Values, df$Lengths)}
   
   cole_post_process <- function(df) {
-    
-    # 1) Wake of 1 epoch was rescored as sleep
-    # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded at least 4(2), 10(5), or 15(7) minutes of wake;
-    # 3) Sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes of wake was rescored as wake.
+    df_old <- df
     
     for (ii in 1:nrow(df)) {
-      print(ii)
       if (is.na(df$Values[ii])) {
         df$Values[ii] <- NA
       } else if (df$Values[ii] == "Sleep") {
-        if ((df$Lengths[ii] == 2 & df$Lengths[ii - 1] >= 6) |
+        # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded at least 4(2), 10(5), or 15(7) minutes of wake;
+        # 3) Sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes of wake was rescored as wake.
+        if ((df$Lengths[ii] == 1 & df$Lengths[ii - 1] >= 2) | 
+            (df$Lengths[ii] == 2 & df$Lengths[ii - 1] >= 6) |
             (df$Lengths[ii] %in% c(3, 4) & df$Lengths[ii - 1] >= 5 & df$Lengths[ii + 1] >= 5) |
             (df$Lengths[ii] == 5 & df$Lengths[ii - 1] >= 10 & df$Lengths[ii + 1] >= 10)) {
           df$Values[ii] <- "Wake"
-          cole_post_process(get_rle_df(rle_df_to_vector(df)))
-        }
-      } else if(df$Values[ii] == "Wake")  {
-        if(df$Lengths[ii] == 1) {
-          df$Values[ii] <- "Sleep"
-          cole_post_process(get_rle_df(rle_df_to_vector(df)))
         }
       }
     }
     
-    return(rle_df_to_vector(df))
+    if (identical(df_old, df)) {
+      return(df)
+    } else {
+      cole_post_process(get_rle_df(rle_df_to_vector(df)))
+    }
   }
+  
   
   vec <- data[, column]
   rle_df <- get_rle_df(vec)
-  out <- suppressWarnings(cole_post_process(rle_df))
+  
+  # 1) Wake of 1 epoch was rescored as sleep
+  rle_df$Values[rle_df$Values == "Wake" & rle_df$Lengths == 1] <- "Sleep"
+  rle_df <- get_rle_df(rle_df_to_vector(rle_df))
+  
+
+  
+  out <- cole_post_process(rle_df) %>%
+    rle_df_to_vector(.)
   
   return(out)
 }
@@ -346,11 +356,11 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
       dplyr::select(-Freq)
     
     ii %<>% merge(., which_day_date, by = "Noon_Date") %>%
-      select(-Noon_Date)# %>%
-      # mutate(Sleep_Smooth = smooth_sleep(., "Sleep"),
-      #        Sleep_Wake_Smooth = smooth_sleep(., "Sleep_Wake"),
-      #        Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"))
-    
+      select(-Noon_Date) %>%
+      mutate(Sleep_Smooth = smooth_sleep(., "Sleep"),
+             Sleep_Wake_Smooth = smooth_sleep(., "Sleep_Wake"),
+             Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"))
+
     return(ii)
   }) %>%
   do.call("rbind", .) %>%
