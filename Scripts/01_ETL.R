@@ -267,7 +267,52 @@ off_wrist_detector <- function(data, threshold) {
   return(do.call("c", lst))
 }
 
-## ------ Lotjonen Parameters & Off-Wrist Detection ------
+## ------ Smooth Sleep Function ------
+
+smooth_sleep <- function(data, column) {
+  ## Internal functions
+  get_rle_df <- function(x) {
+    data.frame(Values = rle(as.character(x))$values,
+               Lengths = rle(as.character(x))$lengths)
+  }
+  rle_df_to_vector <- function(df) {rep(df$Values, df$Lengths)}
+  
+  cole_post_process <- function(df) {
+    
+    # 1) Wake of 1 epoch was rescored as sleep
+    # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded at least 4(2), 10(5), or 15(7) minutes of wake;
+    # 3) Sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes of wake was rescored as wake.
+    
+    for (ii in 1:nrow(df)) {
+      print(ii)
+      if (is.na(df$Values[ii])) {
+        df$Values[ii] <- NA
+      } else if (df$Values[ii] == "Sleep") {
+        if ((df$Lengths[ii] == 2 & df$Lengths[ii - 1] >= 6) |
+            (df$Lengths[ii] %in% c(3, 4) & df$Lengths[ii - 1] >= 5 & df$Lengths[ii + 1] >= 5) |
+            (df$Lengths[ii] == 5 & df$Lengths[ii - 1] >= 10 & df$Lengths[ii + 1] >= 10)) {
+          df$Values[ii] <- "Wake"
+          cole_post_process(get_rle_df(rle_df_to_vector(df)))
+        }
+      } else if(df$Values[ii] == "Wake")  {
+        if(df$Lengths[ii] == 1) {
+          df$Values[ii] <- "Sleep"
+          cole_post_process(get_rle_df(rle_df_to_vector(df)))
+        }
+      }
+    }
+    
+    return(rle_df_to_vector(df))
+  }
+  
+  vec <- data[, column]
+  rle_df <- get_rle_df(vec)
+  out <- suppressWarnings(cole_post_process(rle_df))
+  
+  return(out)
+}
+
+## ------ Lotjonen Parameters, Off-Wrist Detection, and Sleep Smoothing ------
 
 actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   lapply(., function(ii) {
@@ -290,7 +335,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
              Off_Wrist = off_wrist_detector(., 30),
              Lotjonen_Sleep = 1.687 + (0.002 * Activity) - (0.034 * Lotjonen_mean) - 
                (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - (0.127 * Lotjonen_ln),
-             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep > 0.5, "Sleep", "Wake")),
+             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep < 0, "Wake", "Sleep")),
              Noon_Date = factor(date(DateTime + hours(12))))
     
     ## Calculate Noon-Noon days
@@ -301,7 +346,10 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
       dplyr::select(-Freq)
     
     ii %<>% merge(., which_day_date, by = "Noon_Date") %>%
-      select(-Noon_Date)
+      select(-Noon_Date)# %>%
+      # mutate(Sleep_Smooth = smooth_sleep(., "Sleep"),
+      #        Sleep_Wake_Smooth = smooth_sleep(., "Sleep_Wake"),
+      #        Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"))
     
     return(ii)
   }) %>%
@@ -313,20 +361,10 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 
 dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ] %>%
   mutate(Sleep_Agree = apply(.[, c("Sleep", "Sleep_Wake", "Lotjonen_Sleep")],
-                           1, function(ii) {length(unique(unlist(ii))) == 1}))
+                           1, function(ii) {ifelse(any(is.na(ii)), NA, length(unique(unlist(ii))) == 1)}))
 
-# View(dat[, c("Activity", "Light", "DateTime", "Sleep", "Sleep_Wake", "Lotjonen_Sleep",
-#         "Sleep_Agree", "No_Activity_Change_Window", "No_Activity_Length", "Off_Wrist")])
-## ------ Smoothing Sleep ------
-
-# "Arousals lasting 3 minutes or less were rescored as sleep" - Jean-Louis et al
-
-## ------ Cole Post-Processing ------
-
-## I need to decide on the appropriate sleep staging parameter before this can happen
-
-# 1) The sleep of 1, 3, or 4 minutes was rescored as wake if it preceded at least 4, 10, or 15 minutes of wake;
-# 2) the sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes of wake was rescored as wake.
+View(dat[, c("Activity", "Light", "DateTime", "Sleep", "Sleep_Wake", "Lotjonen_Sleep",
+        "Sleep_Agree", "No_Activity_Change_Window", "No_Activity_Length", "Off_Wrist")])
 
 ## ------ Light Adherence ------
 
