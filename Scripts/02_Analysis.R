@@ -72,7 +72,8 @@ DAR_child <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
 
 ggplot(DAR_child, aes(x = patient_ID, y = DAR)) +
   geom_bar(stat = "identity") +
-  geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25)
+  geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) +
+  labs(y = "Daytime Activity Ratio")
 
 ## ------ Nighttime sleep duration ------
 
@@ -139,9 +140,9 @@ getTime <- function (x) {
   return(tim)
 }
 
-find_bedtime <- function(day, ID, data, sleep_column) {
+find_bedtime <- function(noon_day, ID, data, sleep_column) {
   df <- data %>%
-    dplyr::filter(patient_ID == ID & (Day == day & AM_PM == "PM") | (Day == day + 1 & AM_PM == "AM"))
+    dplyr::filter(patient_ID == ID, Noon_Day == noon_day)
   
   sleep <- data.frame(unclass(rle(as.character(df[, sleep_column])))) %>%
     mutate(
