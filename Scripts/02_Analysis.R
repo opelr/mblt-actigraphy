@@ -7,6 +7,7 @@
 library(magrittr)
 library(tidyverse)
 library(lubridate)
+library(reshape2)
 
 acti_files <- readRDS(".\\Data\\actigraphy_header.rds")
 actigraphy <- readRDS(".\\Data\\actigraphy_data.rds") 
@@ -133,10 +134,19 @@ ggplot(percent_sleep, aes(patient_ID, Sleep)) +
 
 ## ------ Bedtime ------
 
-## Converts POSIX to decimal
-get_time <- function (x) {
-  if(!any(class(x) == "POSIXt")) stop("x must be POSIX")
-  tim <- as.numeric(x - trunc(x, "days"))
+get_time <- function (time) {
+  # Converts POSIX to decimal
+  # 
+  # Args:
+  #   time (POSIX)
+  # 
+  # Returns:
+  #   Time as a decimal
+  
+  if(!any(class(time) == "POSIXt"))
+    stop("time must be POSIX")
+  
+  tim <- as.numeric(time - trunc(time, "days"))
   return(tim)
 }
 
@@ -178,42 +188,126 @@ find_bedtime <- function(noon_day, ID, sleep_column, status = "bed", data) {
   }
 }
 
+get_bedtime_loop <- function(data, status) {
+  # lapply 'find_bedtime' function for 'bedtime' data.frame
+  # 
+  # Args:
+  #   data (data.frame)
+  #   status (str): Bed or Wake, same as find_bedtime
+  # 
+  # Returns:
+  #   Vector of POSIX times
+  
+  lapply(rownames(data), function(ii) {
+    ii <- as.integer(ii)
+    
+    find_bedtime(data[, "Noon_Day"][ii], ID = data[, "patient_ID"][ii],
+                 sleep_column = "Sleep_Smooth", status = status,
+                 data = actigraphy)
+  }) %>%
+    do.call("c", .)
+}
+ 
 bedtime <- as.data.frame(table(actigraphy$patient_ID, actigraphy$Noon_Day)) %>%
   set_colnames(c("patient_ID", "Noon_Day", "Freq")) %>%
   dplyr::filter(Freq == 720) %>% 
   arrange(patient_ID, Noon_Day) %>%
-  mutate(
-    Bedtime = lapply(rownames(.), function(ii) {
-      ii <- as.integer(ii)
-    
-      find_bedtime(.[, "Noon_Day"][ii], ID = .[, "patient_ID"][ii],
-                 sleep_column = "Sleep_Smooth", status = "bed",
-                 data = actigraphy)
-    }) %>%
-      do.call("c", .),
-    Waketime = lapply(rownames(bedtime_days), function(ii) {
-      ii <- as.integer(ii)
-      find_bedtime(.[, "Noon_Day"][ii], ID = .[, "patient_ID"][ii],
-                   sleep_column = "Sleep_Smooth", status = "wake",
-                   data = actigraphy)
-    }) %>%
-      do.call("c", .),
+  mutate(Bedtime = get_bedtime_loop(., 'bed'),
+         Waketime = get_bedtime_loop(., 'wake'),
     Day_of_Week = weekdays(Bedtime),
     Weekend = factor(ifelse(Day_of_Week %in% c("Saturday", "Sunday"),
                             "Weekend", "Weekday")),
     Bedtime_Decimal = get_time(Bedtime),
     Waketime_Decimal = get_time(Waketime),
     Bedtime_NoDate = as.POSIXct(strptime(substr(Bedtime, 12, 20), format = "%T")),
-    Waketime_NoDate = as.POSIXct(strptime(substr(Waketime, 12, 20), format = "%T")))
+    Waketime_NoDate = as.POSIXct(strptime(substr(Waketime, 12, 20), format = "%T"))) %>%
+  dplyr::filter(complete.cases(.))
 
+is_noon_time <- aggregate(DateTime ~ patient_ID + Noon_Day, actigraphy, min) %>%
+  rename(Prev_Day = DateTime) %>%
+  mutate(IsNoon = substr(Prev_Day, 12, 20) == "12:00:00") %>%
+  dplyr::filter(IsNoon == T) %>%
+  select(-IsNoon)
+
+bedtime %<>%
+  merge(., is_noon_time, by = c("patient_ID", "Noon_Day")) %>%
+  mutate(Bedtime_from_Noon = as.integer(difftime(Bedtime, Prev_Day, units = "mins")),
+         Waketime_from_Noon = as.integer(difftime(Waketime, Prev_Day, units = "mins")))
 
 # Plotting
 ggplot(bedtime, aes(Bedtime_NoDate,  Day_of_Week, color = Weekend)) +
   geom_point() +
-  scale_x_datetime(date_breaks = "3 hours",
+  scale_x_datetime(date_breaks = "2 hours",
                    date_labels = "%I:%M %p") +
   labs(x = "Hour") +
   facet_grid(patient_ID ~ .)
 
+## ------ Average Bed/Wake Times ------
+
+# Need to calculate bed and wake time from previous noon -- 
+average_bedtime_SEM <- aggregate(cbind(Bedtime_from_Noon, Waketime_from_Noon) ~ patient_ID, 
+          bedtime, opelr::sem) %>%
+  melt(., id.vars = "patient_ID") %>%
+  rename(Status = variable, SEM = value) %>%
+  mutate(Status = gsub("time_from_Noon", "", Status))
+
+average_bedtime <- aggregate(cbind(Bedtime_from_Noon, Waketime_from_Noon) ~ patient_ID,
+                             bedtime, mean) %>%
+  melt(., id.vars = "patient_ID") %>%
+  rename(Status = variable, Time = value) %>%
+  mutate(Status = gsub("time_from_Noon", "", Status)) %>%
+  merge(., average_bedtime_SEM, by = c("patient_ID", "Status")) %>%
+  mutate(upper = Time + SEM,
+         lower = Time - SEM,
+         Template = as.POSIXct(strptime("2017-01-01 12:00:00", format = "%F %T")),
+         DateTime = Template + seconds(Time * 60),
+         upper_Date = DateTime + seconds(SEM * 60),
+         lower_Date = DateTime - seconds(SEM * 60))
+
+ggplot(average_bedtime, aes(DateTime, patient_ID, color = Status)) +
+  geom_point() +
+  scale_x_datetime(date_breaks = "2 hours",
+                   date_labels = "%H:%M") +
+  geom_errorbarh(aes(xmax = upper_Date, xmin = lower_Date), height = 0.1)
 
 ## ------ KNN Sleep Stage Prediction ------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
