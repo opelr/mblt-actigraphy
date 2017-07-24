@@ -1,8 +1,10 @@
 ## Script: Import and Shaping of Actiwatch Data for H4085
 ## Project: actigraphy -- H4085
 ## Author: Ryan Opel -- @opelr
-## Date: 2017-07-12
-## Version: 0.1.0
+## Date: 2017-07-21
+## Version: 0.2.0
+
+#\\TODO: Comment your code!
 
 library(magrittr)
 library(tidyverse)
@@ -19,10 +21,19 @@ acti_files <- data.frame(File = list.files(path = FILE_PATH, pattern = FILE_MASK
 ## ------- Major ETL Functions ------
 
 get_actigraphy_headers <- function(path) {
+  # Strips header information from exported Actiware CSV files
+  # 
+  # Args:
+  #   path (str): Full filepath of an Actiware CSV
+  # 
+  # Returns:
+  #   Data frame containing header information from a single file
+  
+  # Read CSV to table
   acti <- read.table(path, header = FALSE, sep = ",", row.names = NULL,
                      col.names = paste0("X", 1:44), fill = T)
-
-  ## Strip header information to data frame
+  
+  # Strip header information to temporary variables
   patient_name <- as.character(acti$X2[acti$X1 == "Identity:"])
   patient_sex <- as.character(acti$X2[acti$X1 == "Gender:"])
   patient_DOB <- as.character(acti$X2[acti$X1 == "Date of Birth:"])
@@ -39,6 +50,7 @@ get_actigraphy_headers <- function(path) {
   threshold_wake <- acti$X2[acti$X1 == "Wake Threshold Value:"]
   threshold_light <- acti$X2[acti$X1 == "White Light Threshold:"]
   
+  # Create data frame with stripped variables
   header_info <- data.frame(patient_ID = gsub(" ", "_", patient_name)) %>%
     mutate(patient_sex = patient_sex,
            patient_DOB = as.POSIXct(strptime(patient_DOB,
@@ -60,11 +72,20 @@ get_actigraphy_headers <- function(path) {
 }
 
 parse_actigraphy_data <- function(path) {
-  ## Pull epoch-by-epoch data
+  # Strips epoch-by-epoch data from exported Actiware CSV files
+  # 
+  # Args:
+  #   path (str): Full filepath of an Actiware CSV
+  # 
+  # Returns:
+  #   Data frame containing epoch-by-epoch data from a single file
+  
+  # Read entire CSV file to a table, force number of columns
   acti_1 <- read.table(path, header = FALSE, sep = ",", row.names = NULL,
                      col.names = paste0("X", 1:44), fill = T)
   start_row <- which(acti_1$X1 == "-------------------- Epoch-by-Epoch Data -------------------")
   
+  # Skip down to Epoch-by-Epoch Data
   acti_2 <- acti_1[start_row:nrow(acti_1), ]
   line_row <- which(acti_2$X1 == "Line")
   
@@ -80,13 +101,13 @@ parse_actigraphy_data <- function(path) {
     mutate(Sleep_Wake = factor(Sleep_Wake, levels = 0:1,
                                labels = c("Sleep", "Wake")))
   
-  ## Get Name
+  # Get patient name
   nam <- as.character(acti_files$File[acti_files$rootpath == path])
   nam <- strsplit(nam, "_")[[1]][1:2]
   
   acti$patient_ID = paste0(nam, collapse = "_")
   
-  ## Date/Time Calculations
+  # Date/Time Calculations
   acti$DateTime = as.POSIXct(strptime(x = paste(acti$Date, acti$Time),
                                           format = "%Y-%m-%d %I:%M:%S %p"))
   acti$Time = as.POSIXct(strptime(acti$Time, format = "%I:%M:%S %p"))
@@ -106,18 +127,31 @@ parse_actigraphy_data <- function(path) {
 
 ## ------ Sunset Function ------
 
-sunset <- function(city, state = "OR", date) {
-  datetime <- as.POSIXct(strptime(date, format = "%F")) 
-  if (is.na(datetime)) {stop("date variable must be in 'yyyy-mm-dd' format")}
+get_sunset_time <- function(city, state = "OR", date) {
+  # Gets sunrise and sunset time for a specific date and city
+  # 
+  # Args:
+  #   city (str): City name
+  #   state (str): State abbreviation
+  #   date (POSIXct): Date in yyyy-mm-dd format
+  # 
+  # Returns:
+  #   Data frame containing epoch-by-epoch data from a single file
   
+  datetime <- as.POSIXct(strptime(date, format = "%F")) 
+  if (is.na(datetime))
+    stop("date variable must be in 'yyyy-mm-dd' format")
+  
+  # Connects with Navy website, grabs information
   link <- paste0("http://aa.usno.navy.mil/cgi-bin/aa_rstablew.pl?ID=AA&year=", year(datetime),
                  "&task=0&state=", state, "&place=", city)
-  
   sun <- suppressWarnings(readLines(link))
   
   cityVerify <- sun[26]
-  if(grepl("Unable", cityVerify)) {stop("City is not in specified state. Please revise search")}
+  if(grepl("Unable", cityVerify))
+    stop("City is not in specified state. Please revise search")
   
+  # Convert HTML data to matrix
   times <- suppressWarnings(lapply(35:65, function(ii) {
     jj <- gsub("             ", "  NA  ", sun[ii]) %>%
       strsplit(., "  ")
@@ -154,7 +188,7 @@ actigraphy <- do.call("rbind", lapply(acti_files$rootpath, parse_actigraphy_data
   mutate(Date = as.character(Date))
 
 sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
-    sunset(city = "Portland", state = "OR", date = as.character(x))
+  get_sunset_time(city = "Portland", state = "OR", date = as.character(x))
   })) %>%
   mutate(Date = as.character(Date))
 
@@ -175,9 +209,25 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
 ## ------ Rolling Window & Off-Wrist Functions ------
 
 moving_window <- function(dataframe, column = "Activity", window, step, FUN, align) {
-  if (! align %in% c("left", "right", "center")) stop('"align" must be "left", "right", or "center"')
-  if (align == "center" & window %% 2 == 0) stop("'window' must be odd when 'align = center'")
+  # Moving window wrapper for other functions
+  # 
+  # Args:
+  #   dataframe (df): Data frame to iterate upon
+  #   column (str): Which column will we be acting on
+  #   window (int): Size of window (number of rows)
+  #   step (int): How many rows to move each iteration
+  #   FUN (str): Function to utilize
+  #   align (str): Look forward ('left'), backward ('right'), or around ('center')
+  # 
+  # Returns:
+  #   Vector of the same length
   
+  if (! align %in% c("left", "right", "center"))
+    stop('"align" must be "left", "right", or "center"')
+  if (align == "center" & window %% 2 == 0)
+    stop("'window' must be odd when 'align = center'")
+  
+  # Make copy of data
   df <- dataframe
   
   do.call("c", lapply(unique(df[, "patient_ID"]), function(ii) {
@@ -185,6 +235,7 @@ moving_window <- function(dataframe, column = "Activity", window, step, FUN, ali
     
     total <- length(data)
     
+    # Sequence window
     if (align == "left") {
       spots <- seq(from = 1, to = total - window + 1, by = step)
     } else if (align == "right") {
@@ -196,6 +247,7 @@ moving_window <- function(dataframe, column = "Activity", window, step, FUN, ali
     
     result <- vector(length = length(spots))
     
+    # Call function upon the vector window
     for(i in 1:length(spots)){
       if (align == "left") {
         result[i] <- eval(call(FUN, data[spots[i]:(spots[i] + window - 1)]))
@@ -206,6 +258,7 @@ moving_window <- function(dataframe, column = "Activity", window, step, FUN, ali
       }
     }
     
+    # Pad NA's to make vector the same length
     if (align == "left") {
       result <- c(result, rep(NA, window - 1))
     } else if (align == "right") {
@@ -219,23 +272,40 @@ moving_window <- function(dataframe, column = "Activity", window, step, FUN, ali
 }
 
 zero_range <- function(x, tol = .Machine$double.eps ^ 0.5) {
-  ## Tests for equality
-  if (length(x) == 1) return(TRUE)
+  # Test for equality in a vector
+  # 
+  # Args:
+  #   x (int): Vector of numbers
+  # 
+  # Returns:
+  #   Boolean value
+  
+  if (length(x) == 1)
+    return(TRUE)
   x <- range(x) / mean(x)
   isTRUE(all.equal(x[1], x[2], tolerance = tol))
 }
 
-off_wrist_detector <- function(data, threshold) {
-  df <- data
+off_wrist_detector <- function(dataframe, threshold) {
+  # Determines wearer status based on the number of non-changing rows in a look-ahead
+  # 
+  # Args:
+  #   dataframe (df): Data frame to iterate upon
+  #   threshold (int): Number of non-changing rows before off-wrist is called
+  # 
+  # Returns:
+  #   Boolean value denoting off-wrist status
+  
+  # Copy data
+  df <- dataframe
   
   rle_values <- rle(df$No_Activity_Change_Window)$lengths
   
+  # Loop through each bout of non-changing activity
   lst <- lapply(1:length(rle_values), function(ii) {
     
     current_value <- rle_values[ii]
     
-    ## grab elapsed rows (ii - 2)
-    ## use na.locf to carry down decision
     if (ii == 1) {
       
       out <- rep(df$No_Activity_Change_Window[1], current_value)
@@ -273,27 +343,44 @@ data <- dplyr::filter(actigraphy, patient_ID == "Ryan_Opel")
 column <- "Sleep_Wake"
 
 smooth_sleep <- function(data, column) {
-  ## Internal functions
+  # Recursively smooth sleep staging
+  # 
+  # Args:
+  #   data (df): Data frame to iterate upon
+  #   column (str): Name of column to call smoothing functions on
+  # 
+  # Returns:
+  #   Vector containing 'Sleep' and 'Wake', same length as 'column'
+  
+  # Convert RLE object to data.frame
   get_rle_df <- function(x) {
     data.frame(Values = rle(as.character(x))$values,
                Lengths = rle(as.character(x))$lengths)
   }
   
+  # Convert RLE data.frame to a vector
   rle_df_to_vector <- function(df) {rep(df$Values, df$Lengths)}
   
+  # Recursively apply sleep smoothing to RLE DF object
   cole_post_process <- function(df) {
+    
+    # Copy data for comparison
     df_old <- df
     
     for (ii in 1:nrow(df)) {
       if (is.na(df$Values[ii])) {
         df$Values[ii] <- NA
       } else if (df$Values[ii] == "Sleep") {
-        # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded at least 4(2), 10(5), or 15(7) minutes of wake;
-        # 3) Sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes of wake was rescored as wake.
+        # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded
+        #    at least 4(2), 10(5), or 15(7) minutes of wake;
+        # 3) Sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes
+        #    of wake was rescored as wake.
         if ((df$Lengths[ii] == 1 & df$Lengths[ii - 1] >= 2) | 
             (df$Lengths[ii] == 2 & df$Lengths[ii - 1] >= 6) |
-            (df$Lengths[ii] %in% c(3, 4) & df$Lengths[ii - 1] >= 5 & df$Lengths[ii + 1] >= 5) |
-            (df$Lengths[ii] == 5 & df$Lengths[ii - 1] >= 10 & df$Lengths[ii + 1] >= 10)) {
+            (df$Lengths[ii] %in% c(3, 4) & df$Lengths[ii - 1] >= 5 & 
+                df$Lengths[ii + 1] >= 5) |
+            (df$Lengths[ii] == 5 & df$Lengths[ii - 1] >= 10 &
+                df$Lengths[ii + 1] >= 10)) {
           df$Values[ii] <- "Wake"
         }
       }
@@ -310,11 +397,9 @@ smooth_sleep <- function(data, column) {
   vec <- data[, column]
   rle_df <- get_rle_df(vec)
   
-  # 1) Wake of 1 epoch was rescored as sleep
-  rle_df$Values[rle_df$Values == "Wake" & rle_df$Lengths == 1] <- "Sleep"
+  # 1) Wake of 1 or 2 epochs were rescored as sleep
+  rle_df$Values[rle_df$Values == "Wake" & rle_df$Lengths %in%  c(1, 2)] <- "Sleep"
   rle_df <- get_rle_df(rle_df_to_vector(rle_df))
-  
-
   
   out <- cole_post_process(rle_df) %>%
     rle_df_to_vector(.)
@@ -345,7 +430,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
              Off_Wrist = off_wrist_detector(., 30),
              Lotjonen_Sleep = 1.687 + (0.002 * Activity) - (0.034 * Lotjonen_mean) - 
                (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - (0.127 * Lotjonen_ln),
-             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep < 0, "Wake", "Sleep")),
+             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep < 0.5, "Wake", "Sleep")),
              Noon_Date = factor(date(DateTime + hours(12))))
     
     ## Calculate Noon-Noon days
@@ -367,15 +452,6 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   set_rownames(1:nrow(.)) %>%
   dplyr::filter(!is.na(Activity))
 
-## ------ Sleep Agreement ------
-
-dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ] %>%
-  mutate(Sleep_Agree = apply(.[, c("Sleep", "Sleep_Wake", "Lotjonen_Sleep")],
-                           1, function(ii) {ifelse(any(is.na(ii)), NA, length(unique(unlist(ii))) == 1)}))
-
-View(dat[, c("Activity", "Light", "DateTime", "Sleep", "Sleep_Wake", "Lotjonen_Sleep",
-        "Sleep_Agree", "No_Activity_Change_Window", "No_Activity_Length", "Off_Wrist")])
-
 ## ------ Light Adherence ------
 
 ### Count period where mean Light window > 10,000/5,000 across 15/30 epochs
@@ -395,6 +471,17 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   }) %>%
   do.call("rbind", .) %>%
   set_rownames(1:nrow(.))
+
+## ------ Sleep Agreement ------
+
+dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ] %>%
+  mutate(Sleep_Agree = apply(.[, c("Sleep_Smooth", "Sleep_Wake_Smooth", "Lotjonen_Sleep_Smooth")],
+                             1, function(ii) {ifelse(any(is.na(ii)), NA, length(unique(unlist(ii))) == 1)}))
+
+View(dat[, c("Activity", "Light", "DateTime", "Sleep_Smooth", "Sleep_Wake_Smooth",
+             "Lotjonen_Sleep_Smooth", "Sleep_Agree", "Off_Wrist")])
+
+View(dat[, c("Activity", "DateTime", "Lotjonen_Sleep", "Lotjonen_Sleep_Smooth")])
 
 ## ------ Saving RDS ------
 
