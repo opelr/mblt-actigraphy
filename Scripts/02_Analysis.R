@@ -13,17 +13,16 @@ actigraphy <- readRDS(".\\Data\\actigraphy_data.rds")
 
 ## ------ Visualizing a single patient ------
 
-dat <- actigraphy[actigraphy$patient_ID == "Jon_Elliott" & actigraphy$Day == "11", ]
+dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ]
 
-dat <- actigraphy[actigraphy$patient_ID == "Carolyn_Jones",]
+# dat <- actigraphy[actigraphy$patient_ID == "Carolyn_Jones",]
 
 ggplot(dat) +
-  # geom_line(aes(x = Time, y = Light), color = "Orange") + 
+  # geom_line(aes(x = Time, y = Light), color = "Orange") +
   geom_line(aes(x = Time, y = Activity), color = "Black") +
-  scale_x_datetime(date_labels = "%I %p") + 
+  scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
   # scale_y_log10() + 
   facet_grid(Day + DateAbbr ~ .)
-
 
 ## ------ Off Wrist Filtering ------
 
@@ -36,7 +35,8 @@ off_wrist <- as.data.frame.table(xtabs(~patient_ID + Off_Wrist + Day, data = act
 
 actigraphy %<>% merge(., off_wrist[,c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")] %>% 
                rename(Day = Day_number), by = c("patient_ID", "Day")) %>%
-  dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2))
+  dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2)) %>%
+  arrange(patient_ID, DateTime)
 
 ## ------ Percent Time Off-Wrist ------
 
@@ -114,33 +114,48 @@ percent_sleep <- lapply(unique(actigraphy$patient_ID), function (ii) {
   do.call("rbind", .) %>%
   data.frame(.) %>%
   set_colnames(c('Date', 'Stage', 'Sleep', 'patient_ID')) %>%
-  filter(complete.cases(.)) %>%
+  filter(complete.cases(.), Stage == "Sleep") %>%
   mutate(Date = as.POSIXct(strptime(Date, format = "%F")),
          Weekend = weekdays(Date),
          Weekend = factor(ifelse(Weekend %in% c("Saturday", "Sunday"),
                                  "Weekend", "Weekday")))
 
-percent_sleep_agg <- merge(aggregate(Sleep ~ patient_ID + Stage + Weekend, percent_sleep, mean),
-                           aggregate(Sleep ~ patient_ID + Stage + Weekend, percent_sleep, opelr::sem) %>%
+percent_sleep_agg <- merge(aggregate(Sleep ~ patient_ID + Weekend, percent_sleep, mean),
+                           aggregate(Sleep ~ patient_ID + Weekend, percent_sleep, opelr::sem) %>%
                              rename(SEM = Sleep),
-                           by = c("patient_ID", "Stage", "Weekend")) %>%
+                           by = c("patient_ID", "Weekend")) %>%
   mutate(ymax = Sleep + SEM,
-         ymin = Sleep - SEM) %>%
-  dplyr::filter(Stage == "Sleep")
+         ymin = Sleep - SEM)
 
 ggplot(percent_sleep, aes(patient_ID, Sleep)) + 
-  geom_bar(aes(fill = Weekend), stat = "identity", position = "dodge")
+  geom_bar(aes(fill = Weekend), stat = "identity", position = "dodge") +
+  geom_hline(yintercept = 33)
 
 ## ------ Bedtime ------
 
 ## Converts POSIX to decimal
-getTime <- function (x) {
+get_time <- function (x) {
   if(!any(class(x) == "POSIXt")) stop("x must be POSIX")
   tim <- as.numeric(x - trunc(x, "days"))
   return(tim)
 }
 
-find_bedtime <- function(noon_day, ID, data, sleep_column) {
+find_bedtime <- function(noon_day, ID, sleep_column, status = "bed", data) {
+  # Bedtime/Waketime
+  # 
+  # Args:
+  #   noon_day (int): Which day (noon-noon) we're investiagting
+  #   ID (str): Patient name
+  #   sleep_column (str): Which column are we running the function on
+  #   status (str): "bed" or "wake" for bed- and wake-times
+  #   data (df): Data frame to iterate upon
+  # 
+  # Returns:
+  #   Bed- or Wake-time as POSIXct
+  
+  if (! toupper(status) %in% c("BED", "WAKE"))
+    stop("'status' must be either 'bed' or 'wake'")
+  
   df <- data %>%
     dplyr::filter(patient_ID == ID, Noon_Day == noon_day)
   
@@ -149,95 +164,56 @@ find_bedtime <- function(noon_day, ID, data, sleep_column) {
       Index = cumsum(c(1, lengths[-length(lengths)])),
       Time = df[, "DateTime"][Index]
     )
+  
+  max_sleep <- which(sleep$lengths == max(sleep$lengths[sleep$values == "Sleep"])) %>%
+    .[. %in% which(sleep$values == "Sleep")]
+  
+  bed_time <- sleep$Time[max_sleep]
+  wake_time <- sleep$Time[max_sleep + 1]
+  
+  if (toupper(status) == "BED") {
+    return(bed_time)
+  } else {
+    return(wake_time)
+  }
 }
 
-bedtime <- do.call("rbind", sapply(unique(watch$Day), function (ii) {
-  if (nrow(watch[watch$Day == ii & watch$Noon == "Afternoon", ]) > 1) {
-    sl <- watch[watch$Day == ii & watch$Noon == "Afternoon", ]
-
-    x <- data.frame(unclass(rle(as.integer(sl$sleep_agreement))))
-    x$index <- cumsum(c(1, x$lengths[-length(x$lengths)]))
-    x$values <- levels(sl$sleep_agreement)[x$values]
-    x$Time <- sl$DateTime[x$index]
-    # x <- x[complete.cases(x),]
-    x$Hour <- as.integer(substr(x$Time, 12, 13))
-
-    if(any(is.na(x$values))) {
-      x <- x[!is.na(x$values), ]
-    }
-
-    maxBedtime <- x$Time[x$lengths == max(x$lengths[x$values == "Sleep"])]
-
-    xx <- x[x$values == "Sleep" & x$Hour > 19, ]
-    probBedtime <- xx$Time[which(xx$lengths >= 10)][1]
-
-    if(length(maxBedtime) > 1) {maxBedtime <- maxBedtime[length(maxBedtime)]}
-
-    return(data.frame(Day = ii, maxBedtime = maxBedtime, probBedtime = probBedtime,
-               ConsecEpochs = max(x$lengths[x$values == "Sleep"])))
-  }
-
-}))
-
-bedtime <- do.call("rbind", sapply(unique(actigraphy$Day), function(day, patient_ID) {
-  
-  if (nrow(actigraphy[actigraphy$Day == day & actigraphy$Noon == "Afternoon" & actigraphy$patient_ID == patient_ID, ]) > 1) {
-    sl <-  actigraphy[actigraphy$Day == day & actigraphy$Noon == "Afternoon" & actigraphy$patient_ID == patient_ID, ]
+bedtime <- as.data.frame(table(actigraphy$patient_ID, actigraphy$Noon_Day)) %>%
+  set_colnames(c("patient_ID", "Noon_Day", "Freq")) %>%
+  dplyr::filter(Freq == 720) %>% 
+  arrange(patient_ID, Noon_Day) %>%
+  mutate(
+    Bedtime = lapply(rownames(.), function(ii) {
+      ii <- as.integer(ii)
     
-    x <- data.frame(unclass(rle(as.integer(sl$sleep_agreement))))
-    
-    if(sum(is.na(x$values)) > (length(x$values) / 3)) {
-      
-  } else {
-    
-    x$index <- cumsum(c(1, x$lengths[-length(x$lengths)]))
-    x$values <- levels(sl$sleep_agreement)[x$values]
-    x$Time <- sl$DateTime[x$index]
-    # x <- x[complete.cases(x),]
-    x$Hour <- as.integer(substr(x$Time, 12, 13))
-    
-    if(any(is.na(x$values))) {
-      x <- x[!is.na(x$values), ]
-    }
-    
-    maxBedtime <- x$Time[x$lengths == max(x$lengths[x$values == "Sleep"])]
-    
-    xx <- x[x$values == "Sleep" & x$Hour > 19, ]
-    probBedtime <- xx$Time[which(xx$lengths >= 10)][1]
-    
-    if(length(maxBedtime) > 1) {maxBedtime <- maxBedtime[length(maxBedtime)]}
-    
-    return(data.frame(patient_ID = patient_ID, Day = day, maxBedtime = maxBedtime, probBedtime = probBedtime,
-                      ConsecEpochs = max(x$lengths[x$values == "Sleep"])))
-  }
-    
-    
-}}, ID= unique(actigraphy$patient_ID)))
+      find_bedtime(.[, "Noon_Day"][ii], ID = .[, "patient_ID"][ii],
+                 sleep_column = "Sleep_Smooth", status = "bed",
+                 data = actigraphy)
+    }) %>%
+      do.call("c", .),
+    Waketime = lapply(rownames(bedtime_days), function(ii) {
+      ii <- as.integer(ii)
+      find_bedtime(.[, "Noon_Day"][ii], ID = .[, "patient_ID"][ii],
+                   sleep_column = "Sleep_Smooth", status = "wake",
+                   data = actigraphy)
+    }) %>%
+      do.call("c", .),
+    Day_of_Week = weekdays(Bedtime),
+    Weekend = factor(ifelse(Day_of_Week %in% c("Saturday", "Sunday"),
+                            "Weekend", "Weekday")),
+    Bedtime_Decimal = get_time(Bedtime),
+    Waketime_Decimal = get_time(Waketime),
+    Bedtime_NoDate = as.POSIXct(strptime(substr(Bedtime, 12, 20), format = "%T")),
+    Waketime_NoDate = as.POSIXct(strptime(substr(Waketime, 12, 20), format = "%T")))
 
 
-# ===---===---===---====----====----====----====---
-
-
-bedtime$Weekend <- factor(ifelse(isWeekday(bedtime$maxBedtime), "Weekday", "Weekend"))
-
-bedtime$maxNoDay <- strptime(substr(bedtime$maxBedtime, 12, 20), "%T")
-bedtime$probNoDay <- strptime(substr(bedtime$probBedtime, 12, 20), "%T")
-bedtime$dayOfWeek <- factor(weekdays(bedtime$maxBedtime),
-                            levels = rev(c('Sunday', 'Monday', 'Tuesday', 'Wednesday',
-                                           'Thursday', 'Friday', 'Saturday')))
-bedtime$bedDecimal <- getTime(bedtime$maxNoDay)
-
-## Model: Does sleep differ on weekends?
-mod <- anova(lm(bedDecimal ~ Weekend, bedtime))
-p <- signif(mod$`Pr(>F)`[1], 3)
-F.val <- signif(mod$`F value`[1], 3)
-
-## Plotting
-ggplot(bedtime, aes(maxNoDay, dayOfWeek, color = Weekend)) +
+# Plotting
+ggplot(bedtime, aes(Bedtime_NoDate,  Day_of_Week, color = Weekend)) +
   geom_point() +
-  scale_x_datetime(date_breaks = "1 hour",
+  scale_x_datetime(date_breaks = "3 hours",
                    date_labels = "%I:%M %p") +
-  labs(x = "Hour", title = paste0("Miranda's Bedtime, (p=", p, ", F=", F.val, ")"))
+  labs(x = "Hour") +
+  facet_grid(patient_ID ~ .)
 
 
 ## ------ KNN Sleep Stage Prediction ------
