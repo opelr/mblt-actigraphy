@@ -4,8 +4,6 @@
 ## Date: 2017-07-21
 ## Version: 0.2.0
 
-#\\TODO: Comment your code!
-
 library(magrittr)
 library(tidyverse)
 library(lubridate)
@@ -413,7 +411,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
       mutate(
-        Lotjonen_mean = moving_window(., "Activity", 15, 1,FUN = "mean", "center"),
+        Lotjonen_mean = moving_window(., "Activity", 15, 1, FUN = "mean", "center"),
         Lotjonen_sd = moving_window(., "Activity", 17, 1, FUN = "sd", "center"),
         Lotjonen_ln = log(Activity) + 0.1,
         Lotjonen_Counts = Activity > 10,
@@ -431,7 +429,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
              Lotjonen_Sleep = 1.687 + (0.002 * Activity) - (0.034 * Lotjonen_mean) - 
                (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - (0.127 * Lotjonen_ln),
              Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep < 0.5, "Wake", "Sleep")),
-             Noon_Date = factor(date(DateTime + hours(12))))
+             Noon_Date = as.character(date(DateTime + hours(12))))
     
     ## Calculate Noon-Noon days
     which_day_date <- table(ii[, "Day"], ii[, "Date"]) %>%
@@ -442,7 +440,9 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
     
     ii %<>% merge(., which_day_date, by = "Noon_Date") %>%
       select(-Noon_Date) %>%
-      mutate(Sleep_Smooth = smooth_sleep(., "Sleep"),
+      mutate(Noon_Day = opelr::numfac(Noon_Day),
+             Noon_Day = Noon_Day - (min(Noon_Day) - 1),
+             Sleep_Smooth = smooth_sleep(., "Sleep"),
              Sleep_Wake_Smooth = smooth_sleep(., "Sleep_Wake"),
              Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"))
 
