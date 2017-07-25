@@ -14,11 +14,7 @@ actigraphy <- readRDS(".\\Data\\actigraphy_data.rds")
 
 ## ------ Visualizing a single patient ------
 
-dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ]
-
-# dat <- actigraphy[actigraphy$patient_ID == "Carolyn_Jones",]
-
-ggplot(dat) +
+ggplot(actigraphy[actigraphy$patient_ID == "Ryan_Opel", ]) +
   # geom_line(aes(x = Time, y = Light), color = "Orange") +
   geom_line(aes(x = Time, y = Activity), color = "Black") +
   scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
@@ -272,42 +268,89 @@ ggplot(average_bedtime, aes(DateTime, patient_ID, color = Status)) +
 
 ## ------ KNN Sleep Stage Prediction ------
 
+## ------ Light Adherence ------
 
+clean_light_adherence <- function(data, column, patient, date) {
+  # Recursively smooth light adherence
+  # 
+  # Args:
+  #   data (df): Data frame to iterate upon
+  #   column (str): Name of column to call smoothing functions on
+  #   patient (str): Patient name/ID
+  #   date (str): Adherence per day
+  # 
+  # Returns:
+  #   RLE DF of TRUE and FALSE values
+  
+  # Convert RLE object to data.frame
+  get_rle_df <- function(x) {
+    data.frame(Values = rle(as.character(x))$values,
+               Lengths = rle(as.character(x))$lengths)
+  }
+  # Convert RLE data.frame to a vector
+  rle_df_to_vector <- function(df) {
+    rep(df$Values, df$Lengths)
+  }
+  
+  post_process_light <- function(df) {
+    # Copy data for comparison
+    df_old <- df
+    
+    for (ii in 1:nrow(df)) {
+      if (is.na(df$Values[ii])) {
+        df$Values[ii] <- NA
+      } else if (df$Values[ii] == "FALSE") {
+        if (ii == 1) next
+        
+        # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded
+        #    at least 4(2), 10(5), or 15(7) minutes of wake;
+        # 3) Sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes
+        #    of wake was rescored as wake.
+        if ((df$Lengths[ii] == 1 & df$Lengths[ii - 1] >= 2) | 
+            (df$Lengths[ii] == 2 & df$Lengths[ii - 1] >= 6) |
+            (df$Lengths[ii] %in% c(3, 4) & df$Lengths[ii - 1] >= 5 & 
+             df$Lengths[ii + 1] >= 5) |
+            (df$Lengths[ii] == 5 & df$Lengths[ii - 1] >= 10 &
+             df$Lengths[ii + 1] >= 10)) {
+          df$Values[ii] <- "TRUE"
+        }
+      }
+    }
+    
+    if (identical(df_old, df)) {
+      return(df)
+    } else {
+      post_process_light(get_rle_df(rle_df_to_vector(df)))
+    }
+  }
+  
+  vec <- data[data$patient_ID == patient & data$Date == date, column]
+  rle_df <- get_rle_df(vec)
+  
+  out <- post_process_light(rle_df) %>%
+    cbind(., patient, date)
+}
 
+patient_dates <- table(actigraphy$patient_ID, actigraphy$Date) %>%
+  as.data.frame(.) %>%
+  filter(Freq > 0) %>%
+  set_colnames(c("patient_ID", "Date", "Epochs")) %>%
+  arrange(patient_ID, Date)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+light_adherence_parent <- lapply(1:nrow(patient_dates), function(ii) {
+  clean_light_adherence(actigraphy, "Light_15_10k", patient_dates$patient_ID[ii],
+                        patient_dates$Date[ii])
+}) %>%
+  do.call("rbind", .) %>%
+  dplyr::filter(complete.cases(.)) %>%
+  rename(patient_ID = patient, Date = date)
+  
+light_adherence <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
+                                   light_adherence_parent, sum),
+      aggregate(Lengths ~ patient_ID + Date + Values, light_adherence_parent,
+                length) %>%
+        rename(Bouts = Lengths),
+      by = c("patient_ID", "Date", "Values")) %>%
+  filter(Values == TRUE) %>%
+  arrange(patient_ID, Date) %>%
+  mutate(Minutes = 60 * Bouts + 2 * (Lengths - Bouts))
