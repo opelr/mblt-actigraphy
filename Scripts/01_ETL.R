@@ -180,8 +180,11 @@ get_sunset_time <- function(city, state = "OR", date) {
 
 ## ------ Create Data Frames ------
 
+# Append header information onto file list data.frame
 acti_files <- do.call("rbind", lapply(acti_files$rootpath, get_actigraphy_headers)) %>%
   cbind(acti_files, .)
+
+# Create main data.frame
 actigraphy <- do.call("rbind", lapply(acti_files$rootpath, parse_actigraphy_data)) %>%
   mutate(Date = as.character(Date))
 
@@ -203,6 +206,8 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
          log_Activity = log10(Activity),
          log_Light = log10(Light),
          Day = factor(Day, levels = unique(Day)))
+
+rm(sunsetDF)
 
 ## ------ Rolling Window & Off-Wrist Functions ------
 
@@ -337,9 +342,6 @@ off_wrist_detector <- function(dataframe, threshold) {
 
 ## ------ Smooth Sleep Function ------
 
-data <- dplyr::filter(actigraphy, patient_ID == "Ryan_Opel")
-column <- "Sleep_Wake"
-
 smooth_sleep <- function(data, column) {
   # Recursively smooth sleep staging
   # 
@@ -454,19 +456,18 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 
 ## ------ Light Adherence ------
 
-### Count period where mean Light window > 10,000/5,000 across 15/30 epochs
-### How many of these bouts per day
+# Count period where median Light window > 10,000/5,000 lux/m2 across 15/30 epochs
 
 actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
       mutate(
-        Light_mean_15 = moving_window(., "Light", 15, 1, FUN = "median", "center"),
-        Light_15_5k = Light_mean_15 >= 5000, 
-        Light_15_10k = Light_mean_15 >= 10000, 
-        Light_mean_30 = moving_window(., "Light", 31, 1, FUN = "median", "center"),
-        Light_30_5k = Light_mean_30 >= 5000,
-        Light_30_10k = Light_mean_30 >= 10000)
+        Light_median_15 = moving_window(., "Light", 15, 1, FUN = "median", "left"),
+        Light_15_5k = Light_median_15 >= 5000, 
+        Light_15_10k = Light_median_15 >= 10000, 
+        Light_median_30 = moving_window(., "Light", 31, 1, FUN = "median", "left"),
+        Light_30_5k = Light_median_30 >= 5000,
+        Light_30_10k = Light_median_30 >= 10000)
     return(ii)
   }) %>%
   do.call("rbind", .) %>%
