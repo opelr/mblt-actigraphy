@@ -12,14 +12,22 @@ library(reshape2)
 acti_files <- readRDS(".\\Data\\actigraphy_header.rds")
 actigraphy <- readRDS(".\\Data\\actigraphy_data.rds") 
 
+results <- list()
+
 ## ------ Visualizing a single patient ------
 
-ggplot(actigraphy[actigraphy$patient_ID == "Ryan_Opel", ]) +
-  # geom_line(aes(x = Time, y = Light), color = "Orange") +
-  geom_line(aes(x = Time, y = Activity), color = "Black") +
+d1 <- dplyr::filter(actigraphy, patient_ID == "Ryan_Opel") %>%
+  select(., Time, Light, Activity, Day, DateAbbr) %>%
+  mutate(Activity_Scale = Activity * (max(Light) / max(Activity)))
+
+ggplot(d1, mapping = aes(x = Time)) +
+  geom_line(aes(y = Light), color = "Orange") +
+  geom_line(aes(y = Activity_Scale), color = "Black") +
+  facet_grid(Day + DateAbbr ~ .) +
   scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
-  # scale_y_log10() + 
-  facet_grid(Day + DateAbbr ~ .)
+  scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity) / max(d1$Light)),
+                                         name = "Activity")) +
+  ylab("Light")
 
 ## ------ Off Wrist Filtering ------
 
