@@ -89,7 +89,8 @@ parse_actigraphy_data <- function(path) {
   
   acti_3 <- acti_2[line_row:nrow(acti_2), ]
   header_cols <- acti_3[1, ]
-  header_cols <- as.character(header_cols[header_cols != ""])
+  header_cols <- as.character(header_cols[header_cols != ""]) %>%
+    .[!is.na(.)]
   
   acti <- acti_3[2:nrow(acti_3), 1:length(header_cols)] %>%
     set_colnames(as.character(header_cols)) %>%
@@ -200,8 +201,8 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   dplyr::arrange(., patient_ID, DateTime) %>%
   mutate(Activity = opelr::numfac(Activity) + 1,
          Light = opelr::numfac(Light) + 1,
-         DAR_Period = factor(ifelse(DateTime < paste(Date, "07:00:00 PDT") |
-                                    DateTime > paste(Date, "21:59:59 PDT"),
+         DAR_Period = factor(ifelse(DateTime < paste(Date, "06:30:00 PDT") |
+                                    DateTime > paste(Date, "22:59:59 PDT"),
                                     "Night", "Day")),
          log_Activity = log10(Activity),
          log_Light = log10(Light),
@@ -368,7 +369,7 @@ smooth_sleep <- function(data, column) {
     df_old <- df
     
     for (ii in 1:nrow(df)) {
-      if (is.na(df$Values[ii])) {
+      if (is.na(df$Values[ii]) | is.null(df$Values[ii])) {
         df$Values[ii] <- NA
       } else if (df$Values[ii] == "Sleep") {
         # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded
@@ -430,10 +431,22 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
              Off_Wrist = off_wrist_detector(., 30),
              Lotjonen_Sleep = 1.687 + (0.002 * Activity) - (0.034 * Lotjonen_mean) - 
                (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - (0.127 * Lotjonen_ln),
-             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep < 0.5, "Wake", "Sleep")),
+             Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep < 0.0, "Wake", "Sleep")),
+             Lotjonen_Sleep_2 = 2.457 - (0.004 * Activity) - (0.689 * Lotjonen_nat) -
+               (0.007 * Lotjonen_sd) - (0.108 * Lotjonen_ln),
+             Lotjonen_Sleep_2 = factor(ifelse(Lotjonen_Sleep_2 < 0.0, "Wake", "Sleep")),
              Noon_Date = as.character(date(DateTime + hours(12))))
     
-    ## Calculate Noon-Noon days
+    # Sleep Smoothing
+    ii %<>%
+      mutate(
+        Sleep_Smooth = smooth_sleep(., "Sleep"),
+        Sleep_Wake_Smooth = smooth_sleep(., "Sleep_Wake"),
+        Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"),
+        Lotjonen_Sleep_2_Smooth = smooth_sleep(., "Lotjonen_Sleep_2")
+      )
+    
+    # Calculate Noon-Noon days
     which_day_date <- table(ii[, "Day"], ii[, "Date"]) %>%
       as.data.frame.table(.) %>%
       dplyr::filter(Freq > 0) %>%
@@ -443,10 +456,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
     ii %<>% merge(., which_day_date, by = "Noon_Date") %>%
       select(-Noon_Date) %>%
       mutate(Noon_Day = opelr::numfac(Noon_Day),
-             Noon_Day = Noon_Day - (min(Noon_Day) - 1),
-             Sleep_Smooth = smooth_sleep(., "Sleep"),
-             Sleep_Wake_Smooth = smooth_sleep(., "Sleep_Wake"),
-             Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"))
+             Noon_Day = Noon_Day - (min(Noon_Day) - 1))
 
     return(ii)
   }) %>%
@@ -456,8 +466,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 
 ## ------ Light Adherence ------
 
-# Count period where median Light window > 10,000/5,000 lux/m2 across 15/30 epochs
-
+# Count periods where median Light window > 10,000/5,000 lux/m2 across 15/30 epochs
 actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
@@ -472,17 +481,6 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   }) %>%
   do.call("rbind", .) %>%
   set_rownames(1:nrow(.))
-
-## ------ Sleep Agreement ------
-
-dat <- actigraphy[actigraphy$patient_ID == "Ryan_Opel", ] %>%
-  mutate(Sleep_Agree = apply(.[, c("Sleep_Smooth", "Sleep_Wake_Smooth", "Lotjonen_Sleep_Smooth")],
-                             1, function(ii) {ifelse(any(is.na(ii)), NA, length(unique(unlist(ii))) == 1)}))
-
-View(dat[, c("Activity", "Light", "DateTime", "Sleep_Smooth", "Sleep_Wake_Smooth",
-             "Lotjonen_Sleep_Smooth", "Sleep_Agree", "Off_Wrist")])
-
-View(dat[, c("Activity", "DateTime", "Lotjonen_Sleep", "Lotjonen_Sleep_Smooth")])
 
 ## ------ Saving RDS ------
 
