@@ -9,25 +9,10 @@ library(tidyverse)
 library(lubridate)
 library(reshape2)
 
-acti_files <- readRDS(".\\Data\\actigraphy_header.rds")
-actigraphy <- readRDS(".\\Data\\actigraphy_data.rds") 
+acti_files <- readRDS(".\\Rmd\\Data\\actigraphy_header.rds")
+actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_data.rds") 
 
 results <- list()
-
-## ------ Visualizing a single patient ------
-
-d1 <- dplyr::filter(actigraphy, patient_ID == "Ryan_Opel") %>%
-  select(., Time, Light, Activity, Day, DateAbbr) %>%
-  mutate(Activity_Scale = Activity * (max(Light) / max(Activity)))
-
-ggplot(d1, mapping = aes(x = Time)) +
-  geom_line(aes(y = Light), color = "Orange") +
-  geom_line(aes(y = Activity_Scale), color = "Black") +
-  facet_grid(Day + DateAbbr ~ .) +
-  scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
-  scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity) / max(d1$Light)),
-                                         name = "Activity")) +
-  ylab("Light")
 
 ## ------ Off Wrist Filtering ------
 
@@ -40,8 +25,26 @@ off_wrist <- as.data.frame.table(xtabs(~patient_ID + Off_Wrist + Day, data = act
 
 actigraphy %<>% merge(., off_wrist[,c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")] %>% 
                rename(Day = Day_number), by = c("patient_ID", "Day")) %>%
-  dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2)) %>%
-  arrange(patient_ID, DateTime)
+  dplyr::filter(Percent_Off < (2 / 24), Total_Epochs >= (720 / 2)) %>%
+  arrange(patient_ID, DateTime) #%>%
+  # filter(patient_ID != "Rocko_Jones", patient_ID != "Carolyn_Jones",
+  #        patient_ID != "Lew_Andrews")
+
+## ------ Visualizing a single patient ------
+
+d1 <- dplyr::filter(actigraphy, patient_ID == "Peyton_Teutsch") %>%
+  select(., Time, Light, Activity, Day, DateAbbr, Sleep_Smooth) %>%
+  mutate(Activity_Scale = Activity * (max(Light) / max(Activity)),
+         Log_Light = log10(Light))
+
+ggplot(d1, mapping = aes(x = Time)) +
+  geom_line(aes(y = Light), color = "Orange") +
+  geom_line(aes(y = Activity_Scale), color = "Black") +
+  facet_grid(Day + DateAbbr ~ .) +
+  scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
+  scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity) / max(d1$Light)),
+                                         name = "Activity")) +
+  ylab("Light")
 
 ## ------ Percent Time Off-Wrist ------
 
@@ -55,17 +58,15 @@ ggplot(off_wrist, aes(Day_number, Percent_Off, group = patient_ID, color = patie
 
 ## ------ Daytime activity ratio (DAR) ------
 # taken from http://www.neurology.org/content/88/3/268.long
-# Daytime is defined as 7AM - 10 PM --> can be modified in 01_ETL.R script
+# Daytime is defined as 6:30 AM - 11 PM --> can be modified in 01_ETL.R script
 
 DAR_parent <- aggregate(Activity ~ patient_ID + DAR_Period + Day, actigraphy, mean) %>%
   reshape2::dcast(., formula = patient_ID + Day ~ DAR_Period, value.var = "Activity") %>%
   set_colnames(c("patient_ID", "Day_number", "Day", "Night")) %>%
   mutate(DAR = 100 * (Day/(Day + Night))) %>%
   filter(complete.cases(.)) %>%
-  # Use `off_wrist` to verify that watch is on and recording for most of the day
   merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
-        by = c("patient_ID", "Day_number")) #%>%
-  # dplyr::filter(Percent_Off < 10, Total_Epochs >= (720 / 2))
+        by = c("patient_ID", "Day_number"))
 
 DAR_child <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
                    aggregate(DAR ~ patient_ID, DAR_parent, function(X) {
@@ -78,22 +79,21 @@ DAR_child <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
 ggplot(DAR_child, aes(x = patient_ID, y = DAR)) +
   geom_bar(stat = "identity") +
   geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) +
-  labs(y = "Daytime Activity Ratio")
+  labs(y = "Daytime Activity Ratio (6:30 AM - 11 PM)")
 
-## ------ Nighttime sleep duration ------
+results$DAR <- DAR_child
 
-# Need to decide which sleep determinant is the best in previous script
-# Again, daytime is defined as 7AM - 10 PM --> can be modified in 01_ETL.R script
+## ------ Nighttime sleep percentage ------
 
 # `Line` is being used as a dummy variable
-NSD_parent <- aggregate(Line ~ patient_ID + Sleep_Wake + Day + DAR_Period,
+NSD_parent <- aggregate(Line ~ patient_ID + Sleep_Smooth + SunPeriod + Day,
                         actigraphy, length) %>%
-  reshape2::dcast(., formula = patient_ID + DAR_Period + Day ~ Sleep_Wake,
+  reshape2::dcast(., formula = patient_ID + SunPeriod + Day ~ Sleep_Smooth,
                   value.var = "Line") %>%
-  rename(Day_number = Day) %>%
-  merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
-        by = c("patient_ID", "Day_number")) %>%
-  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake)))
+  mutate(Wake = ifelse(is.na(Wake), 0, Wake),
+         Sleep = ifelse(is.na(Sleep), 0, Sleep),
+         Percent_Sleep = 100 * (Sleep/(Sleep + Wake))) %>%
+  filter(SunPeriod == "Night")
 
 NSD_child <- cbind(aggregate(Percent_Sleep ~ patient_ID, NSD_parent, mean),
                    aggregate(Percent_Sleep ~ patient_ID, NSD_parent, function(X) {
@@ -105,34 +105,25 @@ NSD_child <- cbind(aggregate(Percent_Sleep ~ patient_ID, NSD_parent, mean),
 
 ggplot(NSD_child, aes(x = patient_ID, y = Percent_Sleep)) +
   geom_bar(stat = "identity") +
-  geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25)
+  geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) + 
+  labs(y = "Percent Time Sleeping (Sunset - Sunrise)")
+
+results$NSD <- NSD_child
 
 ## ------ Percent Sleep/Social Jetlag ------
 
-percent_sleep <- lapply(unique(actigraphy$patient_ID), function (ii) {
-  df <- actigraphy[actigraphy$patient_ID == ii, ]
-  spec <- as.data.frame.table(100 * prop.table(table(df$Date, df$Sleep_Wake), 1))
-  sleep <- cbind(spec, factor(ii))
-  
-  return(sleep)
-}) %>% 
-  do.call("rbind", .) %>%
-  data.frame(.) %>%
-  set_colnames(c('Date', 'Stage', 'Sleep', 'patient_ID')) %>%
-  filter(complete.cases(.), Stage == "Sleep") %>%
-  mutate(Date = as.POSIXct(strptime(Date, format = "%F")),
+social_jetlag <- aggregate(Sleep_Smooth ~ patient_ID + Date + Day, actigraphy, table) %>%
+  as.data.frame.table(.) %>%
+  filter(Var2 == "patient_ID", Freq.Day != 1) %>%
+  select(-Var1, -Var2, -Freq.Day) %>%
+  set_colnames(c("patient_ID", "Date", "Sleep", "Wake")) %>%
+  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake)),
+         Date = as.POSIXct(strptime(Date, format = "%F")),
          Weekend = weekdays(Date),
          Weekend = factor(ifelse(Weekend %in% c("Saturday", "Sunday"),
                                  "Weekend", "Weekday")))
 
-percent_sleep_agg <- merge(aggregate(Sleep ~ patient_ID + Weekend, percent_sleep, mean),
-                           aggregate(Sleep ~ patient_ID + Weekend, percent_sleep, opelr::sem) %>%
-                             rename(SEM = Sleep),
-                           by = c("patient_ID", "Weekend")) %>%
-  mutate(ymax = Sleep + SEM,
-         ymin = Sleep - SEM)
-
-ggplot(percent_sleep, aes(patient_ID, Sleep)) + 
+ggplot(social_jetlag, aes(patient_ID, Percent_Sleep)) + 
   geom_bar(aes(fill = Weekend), stat = "identity", position = "dodge") +
   geom_hline(yintercept = 33)
 
@@ -238,14 +229,6 @@ bedtime %<>%
   mutate(Bedtime_from_Noon = as.integer(difftime(Bedtime, Prev_Day, units = "mins")),
          Waketime_from_Noon = as.integer(difftime(Waketime, Prev_Day, units = "mins")))
 
-# Plotting
-ggplot(bedtime, aes(Bedtime_NoDate,  Day_of_Week, color = Weekend)) +
-  geom_point() +
-  scale_x_datetime(date_breaks = "2 hours",
-                   date_labels = "%I:%M %p") +
-  labs(x = "Hour") +
-  facet_grid(patient_ID ~ .)
-
 ## ------ Average Bed/Wake Times ------
 
 # Need to calculate bed and wake time from previous noon -- 
@@ -274,7 +257,7 @@ ggplot(average_bedtime, aes(DateTime, patient_ID, color = Status)) +
                    date_labels = "%H:%M") +
   geom_errorbarh(aes(xmax = upper_Date, xmin = lower_Date), height = 0.1)
 
-## ------ KNN Sleep Stage Prediction ------
+results$avg_bedtime <- average_bedtime
 
 ## ------ Light Adherence ------
 
@@ -362,3 +345,48 @@ light_adherence <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
   filter(Values == TRUE) %>%
   arrange(patient_ID, Date) %>%
   mutate(Minutes = 60 * Bouts + 2 * (Lengths - Bouts))
+
+results$light_adherence <- light_adherence
+
+## ------ Average Light Exposure -------
+
+median_light_exposure <- cbind(aggregate(Light ~ patient_ID + Hour,
+                                      actigraphy, median),
+                            aggregate(Light ~ patient_ID + Hour,
+                                      actigraphy, opelr::sem)[3] %>%
+                              rename(SEM = Light)) %>%
+  mutate(ymax = Light + SEM,
+         ymin = Light - SEM)
+
+results$median_light_exposure <- median_light_exposure
+
+p <- ggplot(median_light_exposure, aes(Hour, Light, group= patient_ID,
+                                    color = patient_ID)) + 
+  scale_x_continuous(breaks = seq(0, 24, 4)) + 
+  geom_line(stat = "identity")
+
+## ------ Light vs Activity ------
+
+ggplot(d1, aes(Log_Light, Activity)) + 
+  geom_jitter() +
+  geom_smooth(method = "lm")
+
+## ------ Sleep Duration vs. Light/Activity per day ------
+
+compare <- merge(social_jetlag, aggregate(Light ~ patient_ID + Date, actigraphy, median),
+                 by = c("patient_ID", "Date")) %>%
+  merge(., aggregate(Activity ~ patient_ID + Date, actigraphy, median),
+        by = c("patient_ID", "Date")) %>%
+  mutate(Hours = (Percent_Sleep / 100) * 24)
+
+p <- ggplot(compare, aes(Activity, Hours)) +
+  geom_point(aes(color = patient_ID)) +
+  geom_smooth(method = "lm") +
+  labs(y = "Sleep (hours)")
+
+plotly::ggplotly(p)
+
+## ------ Save RDS ------
+
+saveRDS(results, ".\\Rmd\\Data\\results.rds")
+
