@@ -195,9 +195,8 @@ sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
   mutate(Date = as.character(Date))
 
 actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
-  mutate(SunPeriod = factor(ifelse(DateTime <= Sunrise, "Dawn",
-                            ifelse(DateTime > Sunrise & DateTime < Sunset, "Day",
-                            ifelse(DateTime >= Sunset, "Night", NA))))) %>%
+  mutate(SunPeriod = factor(ifelse(DateTime > Sunrise & DateTime < Sunset, "Day",
+                            "Night"))) %>%
   dplyr::arrange(., patient_ID, DateTime) %>%
   mutate(Activity = opelr::numfac(Activity) + 1,
          Light = opelr::numfac(Light) + 1,
@@ -482,7 +481,13 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   do.call("rbind", .) %>%
   set_rownames(1:nrow(.))
 
+## ------ Filter Bad Recordings ------
+
+actigraphy %<>%
+  filter(patient_ID != "Matt_Wickham")
+
 ## ------ Saving RDS ------
 
-saveRDS(acti_files, ".\\Data\\actigraphy_header.rds")
-saveRDS(actigraphy, ".\\Data\\actigraphy_data.rds")
+saveRDS(acti_files, ".\\Rmd\\Data\\actigraphy_header.rds")
+saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_data.rds")
+
