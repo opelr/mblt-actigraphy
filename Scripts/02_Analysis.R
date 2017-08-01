@@ -344,9 +344,16 @@ light_adherence <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
       by = c("patient_ID", "Date", "Values")) %>%
   filter(Values == TRUE) %>%
   arrange(patient_ID, Date) %>%
-  mutate(Minutes = 60 * Bouts + 2 * (Lengths - Bouts))
+  mutate(Minutes = 60 * Bouts + 2 * (Lengths - Bouts),
+         ABL = Minutes/Bouts)
 
 results$light_adherence <- light_adherence
+
+ggplot(cbind(aggregate(ABL ~ patient_ID, light_adherence, mean),
+             aggregate(Bouts ~ patient_ID, light_adherence, sum)[2]),
+       aes(Bouts, ABL)) +
+  geom_jitter(aes(color = patient_ID), width = 0.05, height = 0.05) +
+  scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 4))
 
 ## ------ Average Light Exposure -------
 
@@ -385,6 +392,31 @@ p <- ggplot(compare, aes(Activity, Hours)) +
   labs(y = "Sleep (hours)")
 
 plotly::ggplotly(p)
+
+results$sleep_dur_light_activity_per_day <- compare
+
+## ----- Day Radial Plots -------
+
+radial_individuals <- aggregate(cbind(Light, Activity) ~ patient_ID + Hour, actigraphy, mean) %>%
+  melt(., id.vars = c("patient_ID", "Hour")) %>%
+  rename(Metric = variable, Value = value) %>%
+  arrange(patient_ID, Metric, Hour) %>%
+  mutate(Time = as.POSIXct(paste0(sprintf("%02d", Hour), ":00:00"), format = "%T"))
+
+radial_means <- aggregate(Value ~ Metric + Hour, radial_individuals, mean) %>%
+  mutate(patient_ID = "mean",
+         Time = as.POSIXct(paste0(sprintf("%02d", Hour), ":00:00"), format = "%T")) %>%
+  select(one_of(colnames(radial)))
+
+radial_intermediary <- rbind(radial_individuals, radial_means)
+
+radial_24 <- dplyr::filter(radial_intermediary, Hour == 0) %>%
+  mutate(Hour = 24,
+         Time = as.POSIXct(paste0(sprintf("%02d", Hour), ":00:00"), format = "%T"))
+
+radial <- rbind(radial_intermediary, radial_24)
+  
+results$radial_plots <- radial
 
 ## ------ Save RDS ------
 
