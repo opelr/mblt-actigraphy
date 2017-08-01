@@ -115,3 +115,43 @@ ggplot(radial, aes(Time, Value, color = Metric)) +
   coord_polar() +
   theme_minimal() +
   labs(y = "", x = "")
+
+## ------ Activity Consolidation ------
+
+ggplot(results$activity_consolidation, aes(Bouts, ABL)) +
+  geom_point(aes(color = patient_ID)) +
+  geom_smooth(method = "lm")
+
+consoli_days <- merge(aggregate(Date ~ patient_ID, results$patient_dates, length) %>%
+                             rename(Total_Days = Date),
+                      aggregate(Date ~ patient_ID, results$activity_consolidation,
+                                length) %>%
+                        rename(Consol_days = Date),
+                           by = "patient_ID", all.x = T) %>%
+  mutate(Percent = 100 * (Consol_days / Total_Days)) %>%
+  opelr::replace_na(., 0)
+
+ggplot(consoli_days, aes(Total_Days, Percent)) +
+  geom_point(aes(color = patient_ID)) +
+  geom_smooth(method = "lm")
+
+
+ggplot(consoli_days, aes(patient_ID, Percent)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
