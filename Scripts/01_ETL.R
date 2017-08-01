@@ -443,12 +443,31 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
       mutate(
-        Light_median_15 = moving_window(., "Light", 15, 1, FUN = "median", "left"),
+        Light_median_15 = moving_window(., column = "Light", 15, 1, FUN = "median", "left"),
         Light_15_5k = Light_median_15 >= 5000, 
         Light_15_10k = Light_median_15 >= 10000, 
-        Light_median_30 = moving_window(., "Light", 31, 1, FUN = "median", "left"),
+        Light_median_30 = moving_window(., column = "Light", 31, 1, FUN = "median", "left"),
         Light_30_5k = Light_median_30 >= 5000,
         Light_30_10k = Light_median_30 >= 10000)
+    return(ii)
+  }) %>%
+  do.call("rbind", .) %>%
+  set_rownames(1:nrow(.))
+
+## ------ Activity Windowing - EE ------
+
+actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
+  lapply(., function(ii) {
+    ii %<>% 
+      mutate(
+        Activity_median_15 = moving_window(., column = "Activity", 15, 1, FUN = "median", "left"),
+        Activity_15_500 = Activity_median_15 >= 500, 
+        Activity_15_1k = Activity_median_15 >= 1000, 
+        Activity_15_2k = Activity_median_15 >= 2000, 
+        Activity_median_30 = moving_window(., column = "Activity", 30, 1, FUN = "median", "left"),
+        Activity_30_500 = Activity_median_30 >= 500, 
+        Activity_30_1k = Activity_median_30 >= 1000,
+        Activity_30_2k = Activity_median_30 >= 2000)
     return(ii)
   }) %>%
   do.call("rbind", .) %>%
