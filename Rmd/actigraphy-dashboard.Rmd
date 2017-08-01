@@ -31,8 +31,7 @@ actigraphy %<>% merge(., off_wrist[,c("patient_ID", "Day_number", "Percent_Off",
                rename(Day = Day_number), by = c("patient_ID", "Day")) %>%
   dplyr::filter(Percent_Off < (2 / 24), Total_Epochs >= (720 / 2)) %>%
   arrange(patient_ID, DateTime) %>%
-  filter(patient_ID != "Rocko_Jones", patient_ID != "Carolyn_Jones",
-         patient_ID != "Lew_Andrews")
+  filter(!patient_ID %in% c("Rocko_Jones", "Carolyn_Jones", "Lew_Andrews"))
 ```
 
 Individual Patients {data-icon="fa-user"}
@@ -70,6 +69,7 @@ renderPlot({
                                            name = "Activity")) +
     labs(y = "Light", title = gsub("_", " ", input$ID))
 })
+
 ```
 
 Column {data-width=150}
@@ -90,7 +90,7 @@ renderValueBox({
 ```{r pg1_days_off_box}
 ## Days off wrist
 renderValueBox({
-  valueBox(aggregate(Off_Wrist ~ Day, dataset(), function(ii) sum(ii) > 60) %>%
+  valueBox(aggregate(Off_Wrist ~ Day, dataset(), function(ii) sum(ii) > 30) %>%
              select(-Day) %>%
              summarise_each(funs(sum)),
            caption = "Days Off Wrist [1]", icon = "fa-exclamation")
@@ -124,8 +124,40 @@ renderValueBox({
 ```{r pg1_light_box}
 ## Peak light
 renderValueBox({
-  valueBox(max(dataset()$Light), caption = "Peak Light",
+  valueBox(round(max(dataset()$Light)), caption = "Peak Light",
            icon = "fa-sun-o")
+})
+```
+
+### Average Sleep
+
+```{r pg1_avg_sleep}
+## Average Sleep (hours)
+
+avg_sleep <- aggregate(Sleep_Smooth ~ patient_ID + Date + Day, actigraphy_static, table) %>%
+  as.data.frame.table(.) %>%
+  filter(Var2 == "patient_ID", Freq.Day != 1) %>%
+  select(-Var1, -Var2, -Freq.Day) %>%
+  set_colnames(c("patient_ID", "Date", "Sleep", "Wake")) %>%
+  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake)),
+         Date = as.POSIXct(strptime(Date, format = "%F"))) %>%
+  merge(., aggregate(Light ~ patient_ID + Date, actigraphy_static, median),
+                 by = c("patient_ID", "Date")) %>%
+  merge(., aggregate(Activity ~ patient_ID + Date, actigraphy_static, median),
+        by = c("patient_ID", "Date")) %>%
+  mutate(Hours = (Percent_Sleep / 100) * 24) %>%
+  merge(., aggregate(Off_Wrist ~ patient_ID + Date, actigraphy_static, sum),
+        by = c("patient_ID", "Date"))
+
+box_avg_sleep <- reactive({
+  dplyr::filter(avg_sleep, patient_ID == input$ID, Off_Wrist < 30) %>%
+    select(Hours) %>% unlist(.) %>% opelr::numfac(.) %>%
+    mean(.) %>% round(., 2)
+})
+
+renderValueBox({
+  valueBox(box_avg_sleep(), caption = "Avg. Sleep Duration (hrs)",
+           icon = "fa-bed")
 })
 ```
 
@@ -174,10 +206,21 @@ Column {data-width=500}
 
 ### Chart B
 ```{r}
-plot(1)
+light_adherence <- cbind(aggregate(ABL ~ patient_ID, results$light_adherence, mean),
+             aggregate(Bouts ~ patient_ID, results$light_adherence, sum)[2])
+
+renderPlotly({
+  p <- ggplot(light_adherence, aes(Bouts, ABL)) +
+    geom_point(aes(color = patient_ID), size = 2) +
+    geom_smooth(method = "lm") +
+    scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 4)) +
+    labs(y = "Avg. Bout Length (min.)")
+  
+  ggplotly(p) %>%
+    layout(autosize = F, width = 750, height = 750)
+  
+})
 ```
-
-
 
 Sleep Metrics {data-icon="fa-bed"}
 =====================================
@@ -247,6 +290,15 @@ ggplot(results$avg_bedtime, aes(DateTime, patient_ID, color = Status)) +
 Activity {data-icon="fa-bicycle"}
 =====================================  
 
+Inputs {.sidebar}
+-------------------------------------
+
+```{r, sidebar4}
+selectInput("radial_ID", label = "Subject Name:",
+            choices = unique(actigraphy_static$patient_ID) %>%
+              set_names(gsub("_", " ", .)))
+```
+
 Column {data-width=500}
 -----------------------------------------------------------------------
 
@@ -257,5 +309,38 @@ ggplot(results$DAR, aes(x = patient_ID, y = DAR)) +
   geom_bar(stat = "identity") +
   geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) +
   labs(y = "Daytime Activity Ratio (6:30 AM - 11 PM)")
+```
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+
+```{r radial_plots}
+
+radial_static <- results$radial_plots
+
+radial <- reactive({
+  dplyr::filter(radial_static, patient_ID == input$radial_ID | patient_ID == "mean" )
+})
+
+
+renderPlot({
+  ggplot(radial(), aes(Time, Value)) +
+  geom_line(data = radial()[radial()$Metric == "Light" & radial()$patient_ID == input$radial_ID, ],
+            color = "darkorange", size = 2) +
+  geom_line(data = radial()[radial()$Metric == "Activity" & radial()$patient_ID == input$radial_ID, ],
+            color = "black", size = 2) +
+  geom_line(data = radial()[radial()$Metric == "Light" & radial()$patient_ID == "mean", ],
+            color = "darkorange", size = 2, alpha=0.2) +
+  geom_line(data = radial()[radial()$Metric == "Activity" & radial()$patient_ID == "mean", ],
+            color = "black", size = 2, alpha=0.2) +
+  scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") +
+  # scale_y_continuous(limits = c(0, 10 ^ ceiling(log10(max(radial$Value))))) +
+  coord_polar() +
+  theme_minimal() +
+  labs(y = "", x = "")
+}, width = "auto")
+
+
 ```
 
