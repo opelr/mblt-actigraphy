@@ -94,3 +94,24 @@ p <- ggplot(results$sleep_dur_light_activity_per_day, aes(Activity, Hours)) +
   labs(y = "Sleep (hours)")
 
 plotly::ggplotly(p)
+
+## ------ Radial Plot ------
+
+pat <- "Ryan_Opel"
+
+radial <-  dplyr::filter(results$radial_plots, patient_ID == pat | patient_ID == "mean" )
+
+ggplot(radial, aes(Time, Value, color = Metric)) +
+  geom_line(data = radial[radial$Metric == "Light" & radial$patient_ID == pat, ],
+            color = "darkorange", size = 2) +
+  geom_line(data = radial[radial$Metric == "Activity" & radial$patient_ID == pat, ],
+            color = "black", size = 2) +
+  geom_line(data = radial[radial$Metric == "Light" & radial$patient_ID == "mean", ],
+            color = "darkorange", size = 2, alpha=0.2) +
+  geom_line(data = radial[radial$Metric == "Activity" & radial$patient_ID == "mean", ],
+            color = "black", size = 2, alpha=0.2) +
+  scale_x_datetime(date_labels = "%I %p", date_breaks = "3 hours", date_minor_breaks = "1 hour") +
+  # scale_y_continuous(limits = c(0, 10 ^ ceiling(log10(max(radial$Value))))) +
+  coord_polar() +
+  theme_minimal() +
+  labs(y = "", x = "")
