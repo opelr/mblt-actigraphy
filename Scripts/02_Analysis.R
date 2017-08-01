@@ -229,8 +229,8 @@ results$avg_bedtime <- average_bedtime
 
 ## ------ Light Adherence ------
 
-clean_light_adherence <- function(data, column, patient, date) {
-  # Recursively smooth light adherence
+clean_adherence <- function(data, column, patient, date) {
+  # Recursively smooth light/activity adherence
   # 
   # Args:
   #   data (df): Data frame to iterate upon
@@ -297,7 +297,7 @@ patient_dates <- table(actigraphy$patient_ID, actigraphy$Date) %>%
   arrange(patient_ID, Date)
 
 light_adherence_parent <- lapply(1:nrow(patient_dates), function(ii) {
-  clean_light_adherence(actigraphy, "Light_15_10k", patient_dates$patient_ID[ii],
+  clean_adherence(actigraphy, "Light_15_10k", patient_dates$patient_ID[ii],
                         patient_dates$Date[ii])
 }) %>%
   do.call("rbind", .) %>%
@@ -312,7 +312,7 @@ light_adherence <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
       by = c("patient_ID", "Date", "Values")) %>%
   filter(Values == TRUE) %>%
   arrange(patient_ID, Date) %>%
-  mutate(Minutes = 60 * Bouts + 2 * (Lengths - Bouts),
+  mutate(Minutes = 30 * Bouts + 2 * (Lengths - Bouts),
          ABL = Minutes/Bouts)
 
 results$light_adherence <- light_adherence
@@ -331,7 +331,7 @@ results$median_light_exposure <- median_light_exposure
 
 ## ------ Sleep Duration vs. Light/Activity per day ------
 
-compare <- merge(social_jetlag, aggregate(Light ~ patient_ID + Date, actigraphy, median),
+compare <- merge(social_jetlag, aggregate(Light ~ patient_ID + Date + Day, actigraphy, median),
                  by = c("patient_ID", "Date")) %>%
   merge(., aggregate(Activity ~ patient_ID + Date, actigraphy, median),
         by = c("patient_ID", "Date")) %>%
@@ -350,7 +350,7 @@ radial_individuals <- aggregate(cbind(Light, Activity) ~ patient_ID + Hour, acti
 radial_means <- aggregate(Value ~ Metric + Hour, radial_individuals, mean) %>%
   mutate(patient_ID = "mean",
          Time = as.POSIXct(paste0(sprintf("%02d", Hour), ":00:00"), format = "%T")) %>%
-  select(one_of(colnames(radial)))
+  select(one_of(colnames(radial_individuals)))
 
 radial_intermediary <- rbind(radial_individuals, radial_means)
 
@@ -361,6 +361,39 @@ radial_24 <- dplyr::filter(radial_intermediary, Hour == 0) %>%
 radial <- rbind(radial_intermediary, radial_24)
   
 results$radial_plots <- radial
+
+## ------ Activity EE Metrics ------
+
+### Consolidated Bouts
+
+activity_consolidation_parent <- lapply(1:nrow(patient_dates), function(ii) {
+  get_rle_df <- function(x) {
+    data.frame(Values = rle(as.character(x))$values,
+               Lengths = rle(as.character(x))$lengths)
+  }
+  x <- actigraphy$Activity_15_2k[actigraphy$patient_ID == patient_dates$patient_ID[ii] &
+                            actigraphy$Date == patient_dates$Date[ii]]
+  
+  cbind(get_rle_df(x), patient_dates$patient_ID[ii], patient_dates$Date[ii])
+}) %>%
+  do.call("rbind", .) %>%
+  dplyr::filter(complete.cases(.)) %>%
+  set_colnames(c("Values", "Lengths", "patient_ID", "Date"))
+
+activity_consolidation <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
+                                          activity_consolidation_parent, sum),
+                         aggregate(Lengths ~ patient_ID + Date + Values, activity_consolidation_parent,
+                                   length) %>%
+                           rename(Bouts = Lengths),
+                         by = c("patient_ID", "Date", "Values")) %>%
+  filter(Values == TRUE) %>%
+  arrange(patient_ID, Date) %>%
+  mutate(Minutes = 30 * Bouts + 2 * (Lengths - Bouts),
+         ABL = Minutes/Bouts)
+
+results$activity_consolidation <- activity_consolidation
+
+### 
 
 ## ------ Save RDS ------
 
