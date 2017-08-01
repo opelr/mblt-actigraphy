@@ -7,6 +7,7 @@
 library(magrittr)
 library(tidyverse)
 library(lubridate)
+library(maptools)
 library(zoo)
 # devtools::install_github("opelr/opelR")
 
@@ -112,13 +113,15 @@ parse_actigraphy_data <- function(path) {
   acti$Time = as.POSIXct(strptime(acti$Time, format = "%I:%M:%S %p"))
   
   acti %<>%
-    mutate(Hour = hour(DateTime),
+    mutate(ClockTime = as.character(strftime(Time, format = "%T")),
+           Hour = hour(DateTime),
            AM_PM = factor(floor(Hour/12), levels = 0:1,
                           labels = c("AM", "PM")),
            Day_of_Week = weekdays(DateTime),
            Weekend = factor(ifelse(Day_of_Week %in% c("Saturday", "Sunday"),
                             "Weekend", "Weekday")),
-           DateAbbr = format(DateTime, format = "%b %d"))
+           DateAbbr = format(DateTime, format = "%b %d"),
+           Month = format(DateTime, format = "%B"))
     
   return(acti)
   
@@ -126,57 +129,27 @@ parse_actigraphy_data <- function(path) {
 
 ## ------ Sunset Function ------
 
-get_sunset_time <- function(city, state = "OR", date) {
-  # Gets sunrise and sunset time for a specific date and city
+get_sun_times <- function(lat, long, date, tz = "America/Los_Angeles") {
+  # Gets sunrise and sunset time for a specific date and city (lat, long)
   # 
   # Args:
-  #   city (str): City name
-  #   state (str): State abbreviation
+  #   lat (numeric): Latitude in degrees
+  #   long (numeric): Longitude in degrees
   #   date (POSIXct): Date in yyyy-mm-dd format
   # 
   # Returns:
   #   Data frame containing epoch-by-epoch data from a single file
   
-  datetime <- as.POSIXct(strptime(date, format = "%F")) 
-  if (is.na(datetime))
-    stop("date variable must be in 'yyyy-mm-dd' format")
+  coordin <- matrix(c(long, lat), nrow = 1)
+  day <- as.POSIXct(date, tz=tz)
   
-  # Connects with Navy website, grabs information
-  link <- paste0("http://aa.usno.navy.mil/cgi-bin/aa_rstablew.pl?ID=AA&year=", year(datetime),
-                 "&task=0&state=", state, "&place=", city)
-  sun <- suppressWarnings(readLines(link))
+  sunrise <- sunriset(coordin, day, direction="sunrise", POSIXct.out=TRUE)
+  sunset <- sunriset(coordin, day, direction="sunset", POSIXct.out=TRUE)
   
-  cityVerify <- sun[26]
-  if(grepl("Unable", cityVerify))
-    stop("City is not in specified state. Please revise search")
-  
-  # Convert HTML data to matrix
-  times <- suppressWarnings(lapply(35:65, function(ii) {
-    jj <- gsub("             ", "  NA  ", sun[ii]) %>%
-      strsplit(., "  ")
-    return(jj)
-  }) %>%
-    unlist(.) %>%
-    matrix(., ncol = 13, byrow = T) %>%
-    as.data.frame(.) %>%
-    set_colnames(c("Day", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")) %>%
-    reshape2::melt(., "Day") %>%
-    set_colnames(c("Day", "Month", "Value")) %>%
-    mutate(Sunrise = gsub(" [0-9]{4}", "", Value),
-           Sunset = gsub("[0-9]{4} ", "", Value),
-           Date = as.POSIXct(strptime(paste0(Month, Day, year(datetime)),
-                                      format = "%b%d%Y")),
-           Sunrise = as.POSIXct(strptime(paste0(Month, Day, year(datetime),
-                                                Sunrise), format = "%b%d%Y%H%M")),
-           Sunset = as.POSIXct(strptime(paste0(Month, Day, year(datetime),
-                                               Sunset), format = "%b%d%Y%H%M"))) %>%
-    dplyr::filter(complete.cases(.)) %>%
-    dplyr::select(-Value, -Day, -Month))
-  
-  out <- times[as.character(times$Date) == date, ]
-  return(out)
-  
+  data.frame(Date = as.Date(sunrise$time),
+             Sunrise = sunrise$time,
+             Sunset = sunset$time,
+             Day_Length = as.numeric(sunset$time - sunrise$time))
 }
 
 ## ------ Create Data Frames ------
@@ -190,7 +163,7 @@ actigraphy <- do.call("rbind", lapply(acti_files$rootpath, parse_actigraphy_data
   mutate(Date = as.character(Date))
 
 sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
-  get_sunset_time(city = "Portland", state = "OR", date = as.character(x))
+  get_sun_times(lat = 45.5231, long = -122.6765, date = as.character(x))
   })) %>%
   mutate(Date = as.character(Date))
 
@@ -484,10 +457,9 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 ## ------ Filter Bad Recordings ------
 
 actigraphy %<>%
-  filter(patient_ID != "Matt_Wickham")
+  filter(!patient_ID %in% c("Matt_Wickham", "Rick_Teutsch"))
 
 ## ------ Saving RDS ------
 
 saveRDS(acti_files, ".\\Rmd\\Data\\actigraphy_header.rds")
 saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_data.rds")
-
