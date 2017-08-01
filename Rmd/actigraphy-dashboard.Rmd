@@ -15,23 +15,9 @@ library(reshape2)
 library(plotly)
 
 acti_files <- readRDS(".\\Data\\actigraphy_header.rds")
-actigraphy <- readRDS(".\\Data\\actigraphy_data.rds") 
+actigraphy_static <- readRDS(".\\Data\\actigraphy_data.rds") 
+actigraphy <- readRDS(".\\Data\\actigraphy_filtered.rds") 
 results <- readRDS(".\\Data\\results.rds") 
-
-actigraphy_static <- actigraphy
-
-off_wrist <- as.data.frame.table(xtabs(~patient_ID + Off_Wrist + Day, data = actigraphy)) %>%
-  reshape2::dcast(., formula = patient_ID + Day ~ Off_Wrist, value.var = "Freq") %>%
-  rename(Watch_On = `FALSE`, Watch_Off = `TRUE`, Day_number = Day) %>%
-  mutate(Percent_Off = 100 * Watch_Off/(Watch_On + Watch_Off),
-         Total_Epochs = Watch_On + Watch_Off) %>%
-  dplyr::filter(complete.cases(.))
-
-actigraphy %<>% merge(., off_wrist[,c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")] %>% 
-               rename(Day = Day_number), by = c("patient_ID", "Day")) %>%
-  dplyr::filter(Percent_Off < (2 / 24), Total_Epochs >= (720 / 2)) %>%
-  arrange(patient_ID, DateTime) %>%
-  filter(!patient_ID %in% c("Rocko_Jones", "Carolyn_Jones", "Lew_Andrews"))
 ```
 
 Individual Patients {data-icon="fa-user"}
@@ -40,7 +26,13 @@ Individual Patients {data-icon="fa-user"}
 Inputs {.sidebar}
 -------------------------------------
 
-```{r, sidepar1}
+This dashboard allows us to examine the actigraphy data collected over the past few weeks from members of the Lim Lab and their friends & families.
+
+This page provides a general overview of an individual's light and activity measurements, in addition to some simple metrics on the far right.
+
+Pick a subject below and start exploring!
+
+```{r, sidebar1}
 selectInput("ID", label = "Subject Name:",
             choices = unique(actigraphy_static$patient_ID) %>%
               set_names(gsub("_", " ", .)))
@@ -66,8 +58,8 @@ renderPlot({
     facet_grid(Day + DateAbbr ~ .) +
     scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
     scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(dataset()$Activity) / max(dataset()$Light)),
-                                           name = "Activity")) +
-    labs(y = "Light", title = gsub("_", " ", input$ID))
+                                           name = "Activity (Counts; bl.)")) +
+    labs(y = "Light (Lux/m2; or.)", title = gsub("_", " ", input$ID))
 })
 
 ```
@@ -166,7 +158,7 @@ renderValueBox({
 [1]: A day as determined "Off-Wrist" if at least one hour's worth of epochs are detected as off-wrist.    
 [2]: A single Light Adherent bout is defined as a period of at least 30 minutes where the median illuminance is greater than or equal to 10k lux/m^2.
 
-Light Adherence {data-icon="fa-sun-o"}
+Light Adherence {data-icon="fa-sun-o"} 
 ===================================== 
 
 Inputs {.sidebar}
@@ -201,10 +193,11 @@ renderPlotly({
 })
 ```
 
+
 Column {data-width=500}
 -----------------------------------------------------------------------
 
-### Chart B
+### Number of Bouts vs. Bout Length
 ```{r}
 light_adherence <- cbind(aggregate(ABL ~ patient_ID, results$light_adherence, mean),
              aggregate(Bouts ~ patient_ID, results$light_adherence, sum)[2])
@@ -230,7 +223,7 @@ Inputs {.sidebar}
 
 ```{r, sidebar3}
 light_activity <- c("Activity", "Light")
-selectInput("light_activity", label = "Independent:", choices = light_activity,
+selectInput("light_activity", label = "Independent Variable:", choices = light_activity,
             selected  = "Activity")
 ```
 
@@ -240,26 +233,8 @@ Column {data-width=500}
 ### Sleep Duration as predicted by Light/Activity
 
 ```{r}
-social_jetlag <- aggregate(Sleep_Smooth ~ patient_ID + Date + Day, actigraphy, table) %>%
-  as.data.frame.table(.) %>%
-  filter(Var2 == "patient_ID", Freq.Day != 1) %>%
-  select(-Var1, -Var2, -Freq.Day) %>%
-  set_colnames(c("patient_ID", "Date", "Sleep", "Wake")) %>%
-  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake)),
-         Date = as.POSIXct(strptime(Date, format = "%F")),
-         Weekend = weekdays(Date),
-         Weekend = factor(ifelse(Weekend %in% c("Saturday", "Sunday"),
-                                 "Weekend", "Weekday")))
-
-compare <- merge(social_jetlag, aggregate(Light ~ patient_ID + Date, actigraphy, median),
-                 by = c("patient_ID", "Date")) %>%
-  merge(., aggregate(Activity ~ patient_ID + Date, actigraphy, median),
-        by = c("patient_ID", "Date")) %>%
-  mutate(Hours = (Percent_Sleep / 100) * 24)
-
-
 renderPlotly({
-  p <- ggplot(compare, aes_string(input$light_activity, "Hours")) +
+  p <- ggplot(results$sleep_dur_light_activity_per_day, aes_string(input$light_activity, "Hours")) +
   geom_point(aes(color = patient_ID)) +
   geom_smooth(method = "lm") +
   labs(y = "Sleep (hours)")
@@ -293,14 +268,39 @@ Activity {data-icon="fa-bicycle"}
 Inputs {.sidebar}
 -------------------------------------
 
-```{r, sidebar4}
-selectInput("radial_ID", label = "Subject Name:",
-            choices = unique(actigraphy_static$patient_ID) %>%
+```{r, activity_sidebar}
+fns <- c("mean", "median", "max", "min", "sd")
+names(fns) <- c("Average", "Median", "Maximum", "Minimum", "Std. Dev.")
+
+selectInput("functions_activity", label = "Activity per Hour -- Function:", choices = fns, selected  = "mean")
+
+
+selectInput("radial_ID", label = "Radial Plot -- Subject Name:",
+            choices = unique(actigraphy$patient_ID) %>%
               set_names(gsub("_", " ", .)))
+
 ```
 
 Column {data-width=500}
 -----------------------------------------------------------------------
+
+### Activity per Hour
+
+```{r activity_per_hour}
+activity_agg <- reactive({
+  aggregate(Activity ~ patient_ID + Hour, actigraphy, get(input$functions_activity))
+})
+
+renderPlotly({
+  p <- ggplot(activity_agg(), aes(Hour, Activity, group = patient_ID,
+                                    color = patient_ID)) + 
+  geom_line(stat = "identity") +
+  scale_x_continuous(breaks = seq(0, 24, 4)) + 
+  labs(y = paste0("Activity (", input$functions, ")"))
+  
+  ggplotly(p, tooltip = c("patient_ID", "Activity", "Hour"))
+})
+```
 
 ### Daytime Activity Ratio
 
@@ -308,12 +308,14 @@ Column {data-width=500}
 ggplot(results$DAR, aes(x = patient_ID, y = DAR)) +
   geom_bar(stat = "identity") +
   geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) +
-  labs(y = "Daytime Activity Ratio (6:30 AM - 11 PM)")
+  labs(y = "Daytime Activity Ratio (6:30 AM - 11 PM)") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 ```
 
 Column {data-width=500}
 -----------------------------------------------------------------------
 
+### Hourly Trends \[1]
 
 ```{r radial_plots}
 
@@ -323,19 +325,22 @@ radial <- reactive({
   dplyr::filter(radial_static, patient_ID == input$radial_ID | patient_ID == "mean" )
 })
 
-
 renderPlot({
   ggplot(radial(), aes(Time, Value)) +
-  geom_line(data = radial()[radial()$Metric == "Light" & radial()$patient_ID == input$radial_ID, ],
+  geom_line(data = radial()[radial()$Metric == "Light" &
+                              radial()$patient_ID == input$radial_ID, ],
             color = "darkorange", size = 2) +
-  geom_line(data = radial()[radial()$Metric == "Activity" & radial()$patient_ID == input$radial_ID, ],
+  geom_line(data = radial()[radial()$Metric == "Activity" &
+                              radial()$patient_ID == input$radial_ID, ],
             color = "black", size = 2) +
-  geom_line(data = radial()[radial()$Metric == "Light" & radial()$patient_ID == "mean", ],
-            color = "darkorange", size = 2, alpha=0.2) +
-  geom_line(data = radial()[radial()$Metric == "Activity" & radial()$patient_ID == "mean", ],
-            color = "black", size = 2, alpha=0.2) +
-  scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") +
-  # scale_y_continuous(limits = c(0, 10 ^ ceiling(log10(max(radial$Value))))) +
+  geom_line(data = radial()[radial()$Metric == "Light" &
+                              radial()$patient_ID == "mean", ],
+            color = "darkorange", size = 2, alpha=0.4) +
+  geom_line(data = radial()[radial()$Metric == "Activity" &
+                              radial()$patient_ID == "mean", ],
+            color = "black", size = 2, alpha=0.4) +
+  scale_x_datetime(date_labels = "%I %p", date_breaks = "3 hours",
+                   date_minor_breaks = "1 hour") +
   coord_polar() +
   theme_minimal() +
   labs(y = "", x = "")
@@ -343,4 +348,9 @@ renderPlot({
 
 
 ```
+
+### Footnotes
+
+\[1]: Light grey is the mean activity, light orange is mean light exposure.  
+
 
