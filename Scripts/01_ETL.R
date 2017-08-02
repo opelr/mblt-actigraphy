@@ -174,9 +174,12 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   dplyr::arrange(., patient_ID, DateTime) %>%
   mutate(Activity = opelr::numfac(Activity) + 1,
          Light = opelr::numfac(Light) + 1,
-         DAR_Period = factor(ifelse(DateTime < paste(Date, "06:30:00 PDT") |
-                                    DateTime > paste(Date, "22:59:59 PDT"),
+         DAR_Period = factor(ifelse(DateTime <= paste(Date, "06:30:00 PDT") |
+                                    DateTime >= paste(Date, "22:59:59 PDT"),
                                     "Night", "Day")),
+         DAR_77 = factor(ifelse(DateTime <= paste(Date, "07:00:00 PDT") |
+                                  DateTime >= paste(Date, "18:59:59 PDT"),
+                                "Night", "Day")),
          log_Activity = log10(Activity),
          log_Light = log10(Light),
          Day = factor(Day, levels = unique(Day)))
