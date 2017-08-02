@@ -14,10 +14,10 @@ library(lubridate)
 library(reshape2)
 library(plotly)
 
-acti_files <- readRDS(".\\Data\\actigraphy_header.rds")
-actigraphy_static <- readRDS(".\\Data\\actigraphy_data.rds") 
-actigraphy <- readRDS(".\\Data\\actigraphy_filtered.rds") 
-results <- readRDS(".\\Data\\results.rds") 
+acti_files <- readRDS("Data/actigraphy_header.rds")
+actigraphy_static <- readRDS("Data/actigraphy_data.rds") 
+actigraphy <- readRDS("Data/actigraphy_filtered.rds") 
+results <- readRDS("Data/results.rds") 
 ```
 
 Individual Patients {data-icon="fa-user"}
@@ -174,7 +174,7 @@ selectInput("functions", label = "Function:", choices = fns, selected  = "mean")
 Column {data-width=500}
 -----------------------------------------------------------------------
 
-### Light Exposure
+### Light Exposure per Hour
 
 ```{r median_light}
 light_exposure <- reactive({
@@ -247,12 +247,12 @@ renderPlotly({
 ```
 
 
-Column {data-width=500}
+Column {.tabset .tabset-fade}
 -----------------------------------------------------------------------
 
 ### Average Bed- and Wake-Time
 
-```{r}
+```{r avg_bedtime}
 ggplot(results$avg_bedtime, aes(DateTime, patient_ID, color = Status)) +
   geom_point() +
   scale_x_datetime(date_breaks = "2 hours",
@@ -261,6 +261,22 @@ ggplot(results$avg_bedtime, aes(DateTime, patient_ID, color = Status)) +
   labs(y = "Patient", x = "Time")
 ```
 
+### TST
+```{r tst}
+ggplot(results$TST, aes(patient_ID, TST_minutes)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymax = ymax, ymin = ymin)) +
+  labs(y = "Total Sleep Time (min.)") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+### WASO
+
+Coming Soon!
+
+### Sleep Latency
+
+Coming Soon!
 
 Activity {data-icon="fa-bicycle"}
 =====================================  
@@ -298,21 +314,12 @@ renderPlotly({
   scale_x_continuous(breaks = seq(0, 24, 4)) + 
   labs(y = paste0("Activity (", input$functions, ")"))
   
-  ggplotly(p, tooltip = c("patient_ID", "Activity", "Hour"))
+  ggplotly(p, tooltip = c("patient_ID", "Activity", "Hour")) %>%
+    layout(autosize = F, width = 750, height = 750)
 })
 ```
 
-### Daytime Activity Ratio
-
-```{r}
-ggplot(results$DAR, aes(x = patient_ID, y = DAR)) +
-  geom_bar(stat = "identity") +
-  geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) +
-  labs(y = "Daytime Activity Ratio (6:30 AM - 11 PM)") +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-```
-
-Column {data-width=500}
+Column {.tabset .tabset-fade}
 -----------------------------------------------------------------------
 
 ### Hourly Trends \[1]
@@ -349,8 +356,18 @@ renderPlot({
 
 ```
 
+### Daytime Activity Ratio
+
+```{r}
+ggplot(results$DAR, aes(x = patient_ID, y = DAR)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) +
+  labs(y = "Daytime Activity Ratio (6:30 AM - 11 PM)") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+
 ### Footnotes
 
 \[1]: Light grey is the mean activity, light orange is mean light exposure.  
-
 
