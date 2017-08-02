@@ -395,6 +395,31 @@ results$activity_consolidation <- activity_consolidation
 
 ### 
 
+## ------ Basic Sleep Metrics ------
+### TST
+
+TST <- merge(aggregate(Sleep ~ patient_ID, social_jetlag, mean),
+             aggregate(Sleep ~ patient_ID, social_jetlag, opelr::sem) %>%
+               rename(SEM = Sleep),
+             by = "patient_ID") %>%
+  mutate(TST_minutes = Sleep * 2,
+         SEM = SEM * 2,
+         ymax = TST_minutes + SEM,
+         ymin = TST_minutes - SEM)
+
+results$TST <- TST
+
+### WASO
+ii <- actigraphy[actigraphy$patient_ID == "Sophie_Lee" & actigraphy$Noon_Day == 4, ]
+
+rle(as.character(ii$Sleep_Smooth))
+rle(as.character(ii$Sleep_Smooth))
+
+
+### Sleep Latency
+
+
+
 ## ------ Save RDS ------
 
 saveRDS(results, ".\\Rmd\\Data\\results.rds")
