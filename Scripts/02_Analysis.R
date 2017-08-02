@@ -44,8 +44,8 @@ results$percent_off_wrist <- percent_off_wrist
 
 ## ------ Daytime activity ratio (DAR) ------
 # taken from http://www.neurology.org/content/88/3/268.long
-# Daytime is defined as 6:30 AM - 11 PM --> can be modified in 01_ETL.R script
 
+### Daytime is defined as 6:30 AM - 11 PM --> can be modified in 01_ETL.R script
 DAR_parent <- aggregate(Activity ~ patient_ID + DAR_Period + Day, actigraphy, mean) %>%
   reshape2::dcast(., formula = patient_ID + Day ~ DAR_Period, value.var = "Activity") %>%
   set_colnames(c("patient_ID", "Day_number", "Day", "Night")) %>%
@@ -64,16 +64,34 @@ DAR_child <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
 
 results$DAR <- DAR_child
 
-## ------ Nighttime sleep percentage ------
+### Daytime is defined as 7:00 AM - 7 PM
+DAR_77_parent <- aggregate(Activity ~ patient_ID + DAR_77 + Day, actigraphy, mean) %>%
+  reshape2::dcast(., formula = patient_ID + Day ~ DAR_77, value.var = "Activity") %>%
+  set_colnames(c("patient_ID", "Day_number", "Day", "Night")) %>%
+  mutate(DAR = 100 * (Day/(Day + Night))) %>%
+  filter(complete.cases(.)) %>%
+  merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
+        by = c("patient_ID", "Day_number"))
+
+DAR_77_child <- cbind(aggregate(DAR ~ patient_ID, DAR_77_parent, mean),
+                   aggregate(DAR ~ patient_ID, DAR_77_parent, function(X) {
+                     opelr::sem(X, na.rm = T)
+                   })[2]) %>%
+  set_colnames(c("patient_ID", "DAR", "SEM")) %>%
+  mutate(ymax = DAR + SEM,
+         ymin = DAR - SEM)
+
+results$DAR_77 <- DAR_77_child
+
+## ------ Nighttime sleep duration ------
 # `Line` is being used as a dummy variable
 
-NSD_parent <- aggregate(Line ~ patient_ID + Sleep_Smooth + SunPeriod + Day,
+NSD_parent <- aggregate(Line ~ patient_ID + Sleep_Thresh_Smooth + SunPeriod + Day,
                         actigraphy, length) %>%
-  reshape2::dcast(., formula = patient_ID + SunPeriod + Day ~ Sleep_Smooth,
+  reshape2::dcast(., formula = patient_ID + SunPeriod + Day ~ Sleep_Thresh_Smooth,
                   value.var = "Line") %>%
-  mutate(Wake = ifelse(is.na(Wake), 0, Wake),
-         Sleep = ifelse(is.na(Sleep), 0, Sleep),
-         Percent_Sleep = 100 * (Sleep/(Sleep + Wake))) %>%
+  opelr::replace_na(., 0) %>%
+  mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake))) %>%
   filter(SunPeriod == "Night")
 
 NSD_child <- cbind(aggregate(Percent_Sleep ~ patient_ID, NSD_parent, mean),
@@ -88,7 +106,7 @@ results$NSD <- NSD_child
 
 ## ------ Percent Sleep/Social Jetlag ------
 
-social_jetlag <- aggregate(Sleep_Smooth ~ patient_ID + Date + Day, actigraphy, table) %>%
+social_jetlag <- aggregate(Sleep_Thresh_Smooth ~ patient_ID + Date + Day, actigraphy, table) %>%
   as.data.frame.table(.) %>%
   filter(Var2 == "patient_ID", Freq.Day != 1) %>%
   select(-Var1, -Var2, -Freq.Day) %>%
@@ -171,7 +189,7 @@ get_bedtime_loop <- function(data, status) {
     ii <- as.integer(ii)
     
     find_bedtime(data[, "Noon_Day"][ii], ID = data[, "patient_ID"][ii],
-                 sleep_column = "Sleep_Smooth", status = status,
+                 sleep_column = "Sleep_Thresh_Smooth", status = status,
                  data = actigraphy)
   }) %>%
     do.call("c", .)
@@ -318,7 +336,7 @@ light_adherence <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
 results$light_adherence <- light_adherence
 results$patient_dates <- patient_dates
 
-## ------ Average Light Exposure -------
+## ------ Median Light Exposure -------
 
 median_light_exposure <- cbind(aggregate(Light ~ patient_ID + Hour,
                                       actigraphy, median),
@@ -329,6 +347,27 @@ median_light_exposure <- cbind(aggregate(Light ~ patient_ID + Hour,
          ymin = Light - SEM)
 
 results$median_light_exposure <- median_light_exposure
+
+## ------ Average Light Exposure during Lightbox Period ------
+
+actigraphy %<>% mutate(Prescribed_Time = Hour %in% 6:10)
+
+avg_light_exposure <- cbind(aggregate(Light ~ patient_ID + Prescribed_Time,
+                                         actigraphy, mean),
+                               aggregate(Light ~ patient_ID + Prescribed_Time,
+                                         actigraphy, opelr::sem)[3] %>%
+                                 rename(SEM = Light)) %>%
+  mutate(ymax = Light + SEM,
+         ymin = Light - SEM)
+
+results$avg_light_exposure_ <- avg_light_exposure
+
+ggplot(avg_light_exposure, aes(patient_ID, Light, group = Prescribed_Time)) +
+  geom_bar(aes(fill = Prescribed_Time), stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymax = ymax, ymin = ymin, group = Prescribed_Time), 
+                width = 0.5, position = position_dodge(0.9)) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  labs(y = "Light Exposure", x = "")
 
 ## ------ Sleep Duration vs. Light/Activity per day ------
 
@@ -393,12 +432,10 @@ activity_consolidation <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
 
 results$activity_consolidation <- activity_consolidation
 
-
 aggregate(Date ~ patient_ID, patient_dates, length)
 
 ## ------ Basic Sleep Metrics ------
 ### TST
-
 TST <- merge(aggregate(Sleep ~ patient_ID, social_jetlag, mean),
              aggregate(Sleep ~ patient_ID, social_jetlag, opelr::sem) %>%
                rename(SEM = Sleep),
@@ -411,12 +448,33 @@ TST <- merge(aggregate(Sleep ~ patient_ID, social_jetlag, mean),
 results$TST <- TST
 
 ### WASO
-ii <- actigraphy[actigraphy$patient_ID == "Sophie_Lee" & actigraphy$Noon_Day == 4, ]
 
-rle(as.character(ii$Sleep_Smooth))
-rle(as.character(ii$Sleep_Smooth))
+patient_noon_days <- table(actigraphy$patient_ID, actigraphy$Noon_Day) %>%
+  as.data.frame(.) %>%
+  filter(Freq > 0) %>%
+  set_colnames(c("patient_ID", "Noon_Day", "Epochs")) %>%
+  arrange(patient_ID, Noon_Day)
+
+WASO <- lapply(1:nrow(patient_noon_days), function(ii) {
+  dat <- actigraphy[actigraphy$patient_ID == patient_noon_days$patient_ID[ii] &
+                      actigraphy$Noon_Day == patient_noon_days$Noon_Day[ii], ]
+  
+  agree <- data.frame(Ver = dat$Sleep_Thresh_Smooth,
+                      Ref = dat$Sleep_Acti) %>%
+    mutate(Agreement = Ver == Ref)
+  
+  WASO <- 100 * sum(!agree$Agreement[agree$Ver == "Sleep"]) / 
+                length(agree$Agreement[agree$Ver == "Sleep"])
+  
+  out <- data.frame(patient_ID = patient_noon_days$patient_ID[ii],
+                    Noon_Day = patient_noon_days$Noon_Day[ii],
+                    WASO = WASO)
+  return(out)
+}) %>%
+  do.call("rbind", .) 
 
 
+results$WASO <- WASO
 ### Sleep Latency
 
 

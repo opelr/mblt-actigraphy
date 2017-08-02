@@ -16,7 +16,7 @@ results <- readRDS(".\\Rmd\\Data\\results.rds")
 ## ------ Visualizing a single patient ------
 
 d1 <- dplyr::filter(actigraphy_static, patient_ID == "Peyton_Teutsch") %>%
-  select(., Time, Light, Activity, Day, DateAbbr, Sleep_Smooth) %>%
+  select(., Time, Light, Activity, Day, DateAbbr, Sleep_Thresh_Smooth) %>%
   mutate(Activity_Scale = Activity * (max(Light) / max(Activity)),
          Log_Light = log10(Light))
 
@@ -47,7 +47,16 @@ ggplot(results$percent_off_wrist, aes(Day_number, Percent_Off,
 ggplot(results$DAR, aes(x = patient_ID, y = DAR)) +
   geom_bar(stat = "identity") +
   geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) +
-  labs(y = "Daytime Activity Ratio (6:30 AM - 11 PM)")
+  labs(y = "Daytime Activity Ratio (6:30 AM - 11 PM)", x = "") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+## ------ Daytime activity ratio (DAR) - 7AM - 7PM ------
+
+ggplot(results$DAR_77, aes(x = patient_ID, y = DAR)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.25) +
+  labs(y = "Daytime Activity Ratio (7 AM - 7 PM)", x = "") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
 ## ------ Nighttime sleep percentage ------
 # `Line` is being used as a dummy variable
@@ -84,7 +93,7 @@ ggplot(cbind(aggregate(ABL ~ patient_ID, results$light_adherence, mean),
 ggplot(results$median_light_exposure, aes(Hour, Light, group= patient_ID,
                                        color = patient_ID)) + 
   scale_x_continuous(breaks = seq(0, 24, 4)) + 
-  geom_line(stat = "identity")
+  geom_line(stat = "identity", size = 1)
 
 ## ------ Sleep Duration vs. Light/Activity per day ------
 
@@ -141,17 +150,18 @@ ggplot(consoli_days, aes(patient_ID, Percent)) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
 
+## ------ WASO ------
 
+WASO_agg <- merge(aggregate(WASO ~ patient_ID,  WASO, mean),
+                  aggregate(WASO ~ patient_ID,  WASO, opelr::sem) %>%
+                    rename(SEM = WASO),
+                  by = "patient_ID") %>%
+  mutate(ymax = WASO + SEM,
+         ymin = WASO - SEM)
 
-
-
-
-
-
-
-
-
-
-
-
+ggplot(WASO_agg, aes(patient_ID, WASO)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymax = ymax, ymin = ymin), width = 0.5) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  labs(y = "WASO (%)", x = "")
 
