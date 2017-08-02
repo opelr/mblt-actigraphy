@@ -1,0 +1,10 @@
+name: actigraphy-dashboard
+title: actigraphy-dashboard
+account: ryanopel
+server: shinyapps.io
+appId: 201342
+bundleId: 924104
+url: https://ryanopel.shinyapps.io/actigraphy-dashboard/
+when: 1501641159.29534
+asMultiple: FALSE
+asStatic: FALSE
