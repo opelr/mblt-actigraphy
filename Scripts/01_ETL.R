@@ -99,7 +99,8 @@ parse_actigraphy_data <- function(path) {
     dplyr::select(., -`Interval Status`, -`S/W Status`) %>%
     rename(., Light = `White Light`, Sleep_Wake = `Sleep/Wake`) %>%
     mutate(Sleep_Wake = factor(Sleep_Wake, levels = 0:1,
-                               labels = c("Sleep", "Wake")))
+                               labels = c("Sleep", "Wake"))) %>%
+    rename(Sleep_Acti = Sleep_Wake)
   
   # Get patient name
   nam <- as.character(acti_files$File[acti_files$rootpath == path])
@@ -325,7 +326,7 @@ smooth_sleep <- function(data, column) {
   # Returns:
   #   Vector containing 'Sleep' and 'Wake', same length as 'column'
   
-  # Convert RLE object to data.frame
+  # Convert vector to RLE object to data.frame
   get_rle_df <- function(x) {
     data.frame(Values = rle(as.character(x))$values,
                Lengths = rle(as.character(x))$lengths)
@@ -390,7 +391,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
         Lotjonen_sd = moving_window(., "Activity", 17, 1, FUN = "sd", "center"),
         Lotjonen_ln = log(Activity) + 0.1,
         Lotjonen_Counts = Activity > 10,
-        Sleep = factor(ifelse(Lotjonen_mean < 100, "Sleep", "Wake")),
+        Sleep_Thresh = factor(ifelse(Lotjonen_mean < 100, "Sleep", "Wake")),
         Activity_diff = do.call("c", lapply(unique(.[, "patient_ID"]), function(ii) {
           c(NaN, diff(.[.[, "patient_ID"] == ii, "Activity"], 1))})),
         No_Activity_Change_Window = moving_window(., "Activity", 22, 1,
@@ -412,8 +413,8 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
     # Sleep Smoothing
     ii %<>%
       mutate(
-        Sleep_Smooth = smooth_sleep(., "Sleep"),
-        Sleep_Wake_Smooth = smooth_sleep(., "Sleep_Wake"),
+        Sleep_Thresh_Smooth = smooth_sleep(., "Sleep_Thresh"),
+        Sleep_Acti_Smooth = smooth_sleep(., "Sleep_Acti"),
         Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"),
         Lotjonen_Sleep_2_Smooth = smooth_sleep(., "Lotjonen_Sleep_2")
       )
