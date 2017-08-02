@@ -316,6 +316,7 @@ light_adherence <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
          ABL = Minutes/Bouts)
 
 results$light_adherence <- light_adherence
+results$patient_dates <- patient_dates
 
 ## ------ Average Light Exposure -------
 
@@ -365,7 +366,6 @@ results$radial_plots <- radial
 ## ------ Activity EE Metrics ------
 
 ### Consolidated Bouts
-
 activity_consolidation_parent <- lapply(1:nrow(patient_dates), function(ii) {
   get_rle_df <- function(x) {
     data.frame(Values = rle(as.character(x))$values,
@@ -393,7 +393,8 @@ activity_consolidation <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
 
 results$activity_consolidation <- activity_consolidation
 
-### 
+
+aggregate(Date ~ patient_ID, patient_dates, length)
 
 ## ------ Save RDS ------
 
