@@ -126,7 +126,7 @@ renderValueBox({
 ```{r pg1_avg_sleep}
 ## Average Sleep (hours)
 
-avg_sleep <- aggregate(Sleep_Smooth ~ patient_ID + Date + Day, actigraphy_static, table) %>%
+avg_sleep <- aggregate(Sleep_Thresh_Smooth ~ patient_ID + Date + Day, actigraphy_static, table) %>%
   as.data.frame.table(.) %>%
   filter(Var2 == "patient_ID", Freq.Day != 1) %>%
   select(-Var1, -Var2, -Freq.Day) %>%
