@@ -180,6 +180,9 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
          DAR_77 = factor(ifelse(DateTime <= paste(Date, "07:00:00 PDT") |
                                   DateTime >= paste(Date, "18:59:59 PDT"),
                                 "Night", "Day")),
+         Instructed_Light_Time = factor(ifelse(DateTime <= paste(Date, "06:30:00 PDT") |
+                                                 DateTime >= paste(Date, "08:59:59 PDT"),
+                                               "Off_Time", "On_Time")),
          log_Activity = log10(Activity),
          log_Light = log10(Light),
          Day = factor(Day, levels = unique(Day)))
