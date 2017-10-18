@@ -11,11 +11,12 @@ library(maptools)
 library(zoo)
 # devtools::install_github("opelr/opelR")
 
-FILE_PATH <- ".\\Data\\Raw\\"
+# FILE_PATH <- "Data/Raw/"
+FILE_PATH <- "D:/data/acquired_data/human/h4085/Actigraphy/CSV/"
 FILE_MASK <- "(.*)_New_Analysis.csv"
 
 acti_files <- data.frame(File = list.files(path = FILE_PATH, pattern = FILE_MASK)) %>%
-  mutate(rootpath = normalizePath(paste0(getwd(), "\\Data\\Raw\\", File)))
+  mutate(rootpath = normalizePath(paste0(FILE_PATH, File)))
 
 ## ------- Major ETL Functions ------
 
@@ -104,9 +105,9 @@ parse_actigraphy_data <- function(path) {
   
   # Get patient name
   nam <- as.character(acti_files$File[acti_files$rootpath == path])
-  nam <- strsplit(nam, "_")[[1]][1:2]
+  acti$patient_ID <- strsplit(nam, "_")[[1]][1]
   
-  acti$patient_ID = paste0(nam, collapse = "_")
+  # acti$patient_ID = paste0(nam, collapse = "_")
   
   # Date/Time Calculations
   acti$DateTime = as.POSIXct(strptime(x = paste(acti$Date, acti$Time),
@@ -265,7 +266,8 @@ zero_range <- function(x, tol = .Machine$double.eps ^ 0.5) {
   
   if (length(x) == 1)
     return(TRUE)
-  x <- range(x) / mean(x)
+  x <- round(x)
+  x <- range(x, na.rm = T) / mean(x, na.rm = T)
   isTRUE(all.equal(x[1], x[2], tolerance = tol))
 }
 
@@ -400,14 +402,14 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
         Sleep_Thresh = factor(ifelse(Lotjonen_mean < 100, "Sleep", "Wake")),
         Activity_diff = do.call("c", lapply(unique(.[, "patient_ID"]), function(ii) {
           c(NaN, diff(.[.[, "patient_ID"] == ii, "Activity"], 1))})),
-        No_Activity_Change_Window = moving_window(., "Activity", 22, 1,
+        No_Activity_Change_Window = moving_window(., "Activity", 90, 1,
                                                   FUN = "zero_range", "left"),
         No_Activity_Change_Window = na.locf(No_Activity_Change_Window),
         No_Activity_Length = rep(rle(No_Activity_Change_Window)[["lengths"]],
                                  rle(No_Activity_Change_Window)[["lengths"]])) %>%
       mutate(Lotjonen_nat = moving_window(., "Lotjonen_Counts", 23, 1,
                                           FUN = "sum", "center"),
-             Off_Wrist = off_wrist_detector(., 30),
+             Off_Wrist = off_wrist_detector(., 1),
              Lotjonen_Sleep = 1.687 + (0.002 * Activity) - (0.034 * Lotjonen_mean) - 
                (0.419 * Lotjonen_nat) + (0.007 * Lotjonen_sd) - (0.127 * Lotjonen_ln),
              Lotjonen_Sleep = factor(ifelse(Lotjonen_Sleep < 0.0, "Wake", "Sleep")),
@@ -432,16 +434,16 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
       rename(Noon_Day = Var1, Noon_Date = Var2) %>%
       dplyr::select(-Freq)
     
-    ii %<>% merge(., which_day_date, by = "Noon_Date") %>%
+    ii %<>% merge(., which_day_date, by = "Noon_Date", all.x = T) %>%
       select(-Noon_Date) %>%
       mutate(Noon_Day = opelr::numfac(Noon_Day),
-             Noon_Day = Noon_Day - (min(Noon_Day) - 1))
+             Noon_Day = Noon_Day - (min(Noon_Day) - 1)) %>%
+      arrange(DateTime)
 
     return(ii)
   }) %>%
   do.call("rbind", .) %>%
-  set_rownames(1:nrow(.)) %>%
-  dplyr::filter(!is.na(Activity))
+  set_rownames(1:nrow(.))
 
 ## ------ Light Adherence ------
 
@@ -479,11 +481,6 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   }) %>%
   do.call("rbind", .) %>%
   set_rownames(1:nrow(.))
-
-## ------ Filter Bad Recordings ------
-
-actigraphy %<>%
-  filter(!patient_ID %in% c("Matt_Wickham", "Rick_Teutsch"))
 
 ## ------ Saving RDS ------
 
