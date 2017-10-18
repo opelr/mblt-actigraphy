@@ -16,28 +16,35 @@ results <- list()
 
 ## ------ Off Wrist Filtering ------
 
-off_wrist <- as.data.frame.table(xtabs(~patient_ID + Off_Wrist + Day, data = actigraphy_static)) %>%
-  reshape2::dcast(., formula = patient_ID + Day ~ Off_Wrist, value.var = "Freq") %>%
-  rename(Watch_On = `FALSE`, Watch_Off = `TRUE`, Day_number = Day) %>%
+### Exclude by any 3+ hour window
+off_wrist <- as.data.frame.table(xtabs(~patient_ID + No_Activity_Change_Window + Day, data = actigraphy_static)) %>%
+  reshape2::dcast(., formula = patient_ID + Day ~ No_Activity_Change_Window, value.var = "Freq") %>%
+  rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
   mutate(Percent_Off = 100 * Watch_Off/(Watch_On + Watch_Off),
          Total_Epochs = Watch_On + Watch_Off) %>%
-  dplyr::filter(complete.cases(.))
+  dplyr::filter(complete.cases(.)) %>%
+  mutate(Consec_Days = split(., .[, "patient_ID"]) %>%
+           lapply(., function(ii) {
+             rep(rle(ii$Watch_On == 720)$lengths, rle(ii$Watch_On == 720)$lengths)
+            }) %>%
+           do.call("c", .),
+         At_Least_96_Hours_On = Consec_Days >= 3 & Watch_On == 720)
 
-actigraphy <-  merge(actigraphy_static,
-                     off_wrist[,c("patient_ID", "Day_number",
-                                  "Percent_Off", "Total_Epochs")] %>% 
-               rename(Day = Day_number), by = c("patient_ID", "Day")) %>%
-  dplyr::filter(Percent_Off < (2 / 24), Total_Epochs >= (720 / 2)) %>%
-  arrange(patient_ID, DateTime) #%>%
-  # filter(patient_ID != "Rocko_Jones", patient_ID != "Carolyn_Jones",
-  #        patient_ID != "Lew_Andrews")
+### Merge
+actigraphy <- merge(actigraphy_static,
+                    off_wrist[,c("patient_ID", "Day", "At_Least_96_Hours_On")],
+                    by = c("patient_ID", "Day")) %>%
+  dplyr::filter(At_Least_96_Hours_On == T) %>%
+  arrange(patient_ID, DateTime)
 
 saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_filtered.rds")
 
 ## ------ Percent Time Off-Wrist ------
 
+## TODO:\\ This is no longer accurate, because each "Watch_Off" counts is 3 hours
+
 percent_off_wrist <- aggregate(cbind(Watch_Off, Total_Epochs) ~ patient_ID,
-                               off_wrist, sum) %>%
+                               off_wrist[opelr::numfac(off_wrist$Day) <= 28, ], sum) %>%
   mutate(Percent_Off = 100 * Watch_Off / Total_Epochs)
 
 results$percent_off_wrist <- percent_off_wrist
@@ -433,6 +440,24 @@ activity_consolidation <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
 results$activity_consolidation <- activity_consolidation
 
 aggregate(Date ~ patient_ID, patient_dates, length)
+
+## ------ Rhythm Stability ------
+
+### Interdaily Stability
+#### The extent to which the profiles of indivudal days resemble each other
+
+aggregate()
+
+### Intradaily Variability
+#### Quantifies how fragmented the rhythm is ewlative to the overall variance
+
+
+
+### Domintant Rest Phase Onset
+#' Represents the clock time at which the 5-hr period of lowest activity in
+#' the average 24-hr pattern started
+
+
 
 ## ------ Basic Sleep Metrics ------
 ### TST
