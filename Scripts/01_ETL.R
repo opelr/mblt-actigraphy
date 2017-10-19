@@ -432,12 +432,13 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
       as.data.frame.table(.) %>%
       dplyr::filter(Freq > 0) %>%
       rename(Noon_Day = Var1, Noon_Date = Var2) %>%
+      mutate(Noon_Date = as.character(Noon_Date)) %>%
       dplyr::select(-Freq)
     
     ii %<>% merge(., which_day_date, by = "Noon_Date", all.x = T) %>%
       select(-Noon_Date) %>%
       mutate(Noon_Day = opelr::numfac(Noon_Day),
-             Noon_Day = Noon_Day - (min(Noon_Day) - 1)) %>%
+             Noon_Day = Noon_Day - (min(Noon_Day, na.rm = T) - 1)) %>%
       arrange(DateTime)
 
     return(ii)
