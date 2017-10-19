@@ -113,18 +113,81 @@ results$NSD <- NSD_child
 
 ## ------ Percent Sleep/Social Jetlag ------
 
-social_jetlag <- aggregate(Sleep_Thresh_Smooth ~ patient_ID + Date + Day, actigraphy, table) %>%
+percent_sleep <- aggregate(Sleep_Thresh_Smooth ~ patient_ID + Date + Day, actigraphy, table) %>%
   as.data.frame.table(.) %>%
   filter(Var2 == "patient_ID", Freq.Day != 1) %>%
   select(-Var1, -Var2, -Freq.Day) %>%
   set_colnames(c("patient_ID", "Date", "Sleep", "Wake")) %>%
   mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake)),
          Date = as.POSIXct(strptime(Date, format = "%F")),
-         Weekend = weekdays(Date),
-         Weekend = factor(ifelse(Weekend %in% c("Saturday", "Sunday"),
+         DayOfWeek = weekdays(Date),
+         Weekend = factor(ifelse(DayOfWeek %in% c("Saturday", "Sunday"),
                                  "Weekend", "Weekday")))
 
-results$social_jetlag <- social_jetlag
+# results$percent_sleep <- percent_sleep
+
+## ------ Basic Sleep Metrics ------
+### TST
+TST <- merge(aggregate(Sleep ~ patient_ID, percent_sleep, mean),
+             aggregate(Sleep ~ patient_ID, percent_sleep, sd) %>%
+               rename(SD = Sleep),
+             by = "patient_ID") %>%
+  mutate(TST_minutes = Sleep * 2,
+         SD_minutes = SD * 2,
+         ymax = TST_minutes + SD_minutes,
+         ymin = TST_minutes - SD_minutes)
+
+# results$TST <- TST
+
+days <- merge(aggregate(Day ~ patient_ID, actigraphy_static, function(x) length(unique(x))),
+              aggregate(Day ~ patient_ID, actigraphy, function(x) length(unique(x))) %>%
+                rename(Filtered_Days = Day),
+              by = "patient_ID")
+
+TST_comparison <- TST[, c("patient_ID", "TST_minutes", "SD_minutes")] %>%
+  mutate(Acti_reported_minutes = c(514.07, 687.13, 395.69, 562.27, 955.59, 456.97, 741.78, 667.89, 951.35, 838.26, 639.73, 754.62),
+         Acti_reported_SD = c(149.98, 192.97, 111.37, 252.7, 443.35, 239.35, 343.24, 501.49, 446.22, 388.67, 198.4, 258.04)) %>%
+  merge(., days, "patient_ID") %>%
+  mutate(Diff_Days = Day - Filtered_Days)
+
+TST_comparison
+
+### WASO
+
+dat <- actigraphy[actigraphy$patient_ID == patient_noon_days$patient_ID[ii] &
+                    actigraphy$Noon_Day == patient_noon_days$Noon_Day[ii], ]
+
+################################ OLD WASO
+
+patient_noon_days <- table(actigraphy$patient_ID, actigraphy$Noon_Day) %>%
+  as.data.frame(.) %>%
+  filter(Freq > 0) %>%
+  set_colnames(c("patient_ID", "Noon_Day", "Epochs")) %>%
+  arrange(patient_ID, Noon_Day)
+
+WASO <- lapply(1:nrow(patient_noon_days), function(ii) {
+  dat <- actigraphy[actigraphy$patient_ID == patient_noon_days$patient_ID[ii] &
+                      actigraphy$Noon_Day == patient_noon_days$Noon_Day[ii], ]
+  
+  agree <- data.frame(Ver = dat$Sleep_Thresh_Smooth,
+                      Ref = dat$Sleep_Acti) %>%
+    mutate(Agreement = Ver == Ref)
+  
+  WASO <- 100 * sum(!agree$Agreement[agree$Ver == "Sleep"]) / 
+              length(agree$Agreement[agree$Ver == "Sleep"])
+  
+  out <- data.frame(patient_ID = patient_noon_days$patient_ID[ii],
+                    Noon_Day = patient_noon_days$Noon_Day[ii],
+                    WASO = WASO)
+  return(out)
+}) %>%
+  do.call("rbind", .) 
+
+
+results$WASO <- WASO
+### Sleep Latency
+
+
 
 ## ------ Bedtime ------
 
@@ -378,7 +441,7 @@ ggplot(avg_light_exposure, aes(patient_ID, Light, group = Prescribed_Time)) +
 
 ## ------ Sleep Duration vs. Light/Activity per day ------
 
-compare <- merge(social_jetlag, aggregate(Light ~ patient_ID + Date + Day, actigraphy, median),
+compare <- merge(percent_sleep, aggregate(Light ~ patient_ID + Date + Day, actigraphy, median),
                  by = c("patient_ID", "Date")) %>%
   merge(., aggregate(Activity ~ patient_ID + Date, actigraphy, median),
         by = c("patient_ID", "Date")) %>%
@@ -570,54 +633,6 @@ calculate_IV <- function(var) {
 #' the average 24-hr pattern started
 #   
 # }
-
-
-
-
-## ------ Basic Sleep Metrics ------
-### TST
-TST <- merge(aggregate(Sleep ~ patient_ID, social_jetlag, mean),
-             aggregate(Sleep ~ patient_ID, social_jetlag, opelr::sem) %>%
-               rename(SEM = Sleep),
-             by = "patient_ID") %>%
-  mutate(TST_minutes = Sleep * 2,
-         SEM = SEM * 2,
-         ymax = TST_minutes + SEM,
-         ymin = TST_minutes - SEM)
-
-results$TST <- TST
-
-### WASO
-
-patient_noon_days <- table(actigraphy$patient_ID, actigraphy$Noon_Day) %>%
-  as.data.frame(.) %>%
-  filter(Freq > 0) %>%
-  set_colnames(c("patient_ID", "Noon_Day", "Epochs")) %>%
-  arrange(patient_ID, Noon_Day)
-
-WASO <- lapply(1:nrow(patient_noon_days), function(ii) {
-  dat <- actigraphy[actigraphy$patient_ID == patient_noon_days$patient_ID[ii] &
-                      actigraphy$Noon_Day == patient_noon_days$Noon_Day[ii], ]
-  
-  agree <- data.frame(Ver = dat$Sleep_Thresh_Smooth,
-                      Ref = dat$Sleep_Acti) %>%
-    mutate(Agreement = Ver == Ref)
-  
-  WASO <- 100 * sum(!agree$Agreement[agree$Ver == "Sleep"]) / 
-                length(agree$Agreement[agree$Ver == "Sleep"])
-  
-  out <- data.frame(patient_ID = patient_noon_days$patient_ID[ii],
-                    Noon_Day = patient_noon_days$Noon_Day[ii],
-                    WASO = WASO)
-  return(out)
-}) %>%
-  do.call("rbind", .) 
-
-
-results$WASO <- WASO
-### Sleep Latency
-
-
 
 ## ------ Save RDS ------
 
