@@ -670,8 +670,9 @@ M10 <- calc_rest_phase(10, 'max') %>%
 L5 <- calc_rest_phase(5, 'min')  %>%
   rename(L5_Activity = activity_mean)
 
-RA <- merge(M10, L5, by = "patient_ID") %>%
-  mutate(RA = (M10_Activity - L5_Activity) / (M10_Activity + L5_Activity))
+RA <- merge(M10, L5, by = "patient_id") %>%
+  rename(patient_ID = patient_id) %>%
+   mutate(RA = (M10_Activity - L5_Activity) / (M10_Activity + L5_Activity))
 
 ## ------ Save RDS ------
 
