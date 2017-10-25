@@ -15,19 +15,24 @@ results <- readRDS(".\\Rmd\\Data\\results.rds")
 
 ## ------ Visualizing a single patient ------
 
-d1 <- dplyr::filter(actigraphy_static, patient_ID == "Peyton_Teutsch") %>%
-  select(., Time, Light, Activity, Day, DateAbbr, Sleep_Thresh_Smooth) %>%
-  mutate(Activity_Scale = Activity * (max(Light) / max(Activity)),
-         Log_Light = log10(Light))
-
-ggplot(d1, mapping = aes(x = Time)) +
-  geom_line(aes(y = Light), color = "Orange") +
-  geom_line(aes(y = Activity_Scale), color = "Black") +
-  facet_grid(Day + DateAbbr ~ .) +
-  scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
-  scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity) / max(d1$Light)),
-                                         name = "Activity")) +
-  ylab("Light")
+plot_patient <- function(patient, df) {
+  d1 <- dplyr::filter(df, patient_ID == patient) %>%
+    select(., Time, Light, Activity, Day, DateAbbr, Sleep_Acti) %>%
+    mutate(Activity_Scale = Activity * (max(Light, na.rm = T) / max(Activity, na.rm = T)),
+           Log_Light = log10(Light))
+  
+  p <- ggplot(d1, mapping = aes(x = Time)) +
+    geom_line(aes(y = Light), color = "Orange") +
+    geom_line(aes(y = Activity_Scale), color = "Black") +
+    facet_grid(Day + DateAbbr ~ .) +
+    scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
+    scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity, na.rm = T) / max(d1$Light, na.rm = T)),
+                                           name = "Activity")) +
+    ylab("Light") + 
+    labs(title = patient)
+  
+  plot(p)
+}
 
 ## ------ Light vs Activity ------
 
