@@ -634,6 +634,45 @@ calculate_IV <- function(var) {
 #   
 # }
 
+interdaily_stab <- calculate_IS("Activity")
+intradaily_var <- calculate_IV("Activity")
+
+
+
+## ------ Relative Amplitude (RA), M10, and L5 ------
+
+calc_rest_phase <- function(len, fn = 'max') {
+  hours <- unique(actigraphy$Hour)[1:(length(unique(actigraphy$Hour)) - (len - 1))]
+  
+  rest_phase <- lapply(hours, function (i) {
+    out <- aggregate(Activity ~ patient_ID + Day,
+                     dplyr::filter(actigraphy, Hour >= i, Hour <= i + (len - 1)),
+                     sum) %>%
+      rename(Activity_Sum = Activity) %>%
+      mutate(Hours = paste0(i, "-", i + (len - 1)),
+             Activity_Mean = Activity_Sum / len)
+  }) %>%
+    do.call("rbind", .)
+  
+  rp2 <- aggregate(Activity_Mean ~ patient_ID + Hours, rest_phase, mean)
+  
+  rp3 <- aggregate(Activity_Mean ~ patient_ID, rp2, function(j) {f <- get(fn); f(j)}) %>%
+    merge(., rp2, by = c("patient_ID", "Activity_Mean"), all_x = T) %>%
+    rename_(.dots=setNames(names(.), tolower(gsub("Hours",
+                                                  paste0(fn, len, "Hours"),
+                                                  names(.)))))
+  
+   return(rp3)
+}
+
+M10 <- calc_rest_phase(10, 'max') %>%
+  rename(M10_Activity = activity_mean)
+L5 <- calc_rest_phase(5, 'min')  %>%
+  rename(L5_Activity = activity_mean)
+
+RA <- merge(M10, L5, by = "patient_ID") %>%
+  mutate(RA = (M10_Activity - L5_Activity) / (M10_Activity + L5_Activity))
+
 ## ------ Save RDS ------
 
 saveRDS(results, ".\\Rmd\\Data\\results.rds")
