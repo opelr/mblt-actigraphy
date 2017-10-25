@@ -190,6 +190,34 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
 
 rm(sunsetDF)
 
+## ------ Sleep Staging Functions ------
+
+actiware_sleep <- function(df, column = "Activity", threshold) {
+  # Replicates Actiware's threshold-based sleep-staging algorithm
+  # 
+  # Args:
+  #   dataframe (df): Data frame to iterate upon; must be single patient to work correctly
+  #   column (str): Which column will we be acting on
+  #   threshold (int): Lower bound for levels to be considered "Wake"
+  # 
+  # Returns:
+  #   A same-length vector of Sleep and Wake values
+  #
+  # Example:
+  #   actiware_sleep(dplyr::filter(actigraphy, patient_ID == "A26598.1"), threshold = 40))
+  
+  x <- df[, column]
+  
+  calc_values <- sapply(2:(length(x) - 1), function(ii) {
+    y = (x[ii - 1] * 0.12) + (x[ii] * 0.5)  + (x[ii + 1] * 0.12)
+  }) %>%
+    c(NA, ., NA)
+  
+  sleep_stats <- factor(ifelse(calc_values > threshold, "Wake", "Sleep"))
+  
+  return(sleep_stats)
+}
+
 ## ------ Rolling Window & Off-Wrist Functions ------
 
 moving_window <- function(dataframe, column = "Activity", window, step, FUN, align) {
