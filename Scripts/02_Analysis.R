@@ -9,35 +9,9 @@ library(tidyverse)
 library(lubridate)
 library(reshape2)
 
-acti_files <- readRDS(".\\Rmd\\Data\\actigraphy_header.rds")
-actigraphy_static <- readRDS(".\\Rmd\\Data\\actigraphy_data.rds") 
+actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds") 
 
 results <- list()
-
-## ------ Off Wrist Filtering ------
-
-### Exclude by any 3+ hour window
-off_wrist <- as.data.frame.table(xtabs(~patient_ID + No_Activity_Change_Window + Day, data = actigraphy_static)) %>%
-  reshape2::dcast(., formula = patient_ID + Day ~ No_Activity_Change_Window, value.var = "Freq") %>%
-  rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
-  mutate(Percent_Off = 100 * Watch_Off/(Watch_On + Watch_Off),
-         Total_Epochs = Watch_On + Watch_Off) %>%
-  dplyr::filter(complete.cases(.)) %>%
-  mutate(Consec_Days = split(., .[, "patient_ID"]) %>%
-           lapply(., function(ii) {
-             rep(rle(ii$Watch_On == 720)$lengths, rle(ii$Watch_On == 720)$lengths)
-            }) %>%
-           do.call("c", .),
-         At_Least_96_Hours_On = Consec_Days >= 3 & Watch_On == 720)
-
-### Merge
-actigraphy <- merge(actigraphy_static,
-                    off_wrist[,c("patient_ID", "Day", "At_Least_96_Hours_On")],
-                    by = c("patient_ID", "Day")) %>%
-  dplyr::filter(At_Least_96_Hours_On == T) %>%
-  arrange(patient_ID, DateTime)
-
-saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_filtered.rds")
 
 ## ------ Percent Time Off-Wrist ------
 
@@ -113,11 +87,11 @@ results$NSD <- NSD_child
 
 ## ------ Percent Sleep/Social Jetlag ------
 
-percent_sleep <- aggregate(Sleep_Thresh_Smooth ~ patient_ID + Date + Day, actigraphy, table) %>%
+percent_sleep <- aggregate(Sleep_Thresh_Smooth ~ patient_ID + MBLT_Group + Date + Day, actigraphy, table) %>%
   as.data.frame.table(.) %>%
   filter(Var2 == "patient_ID", Freq.Day != 1) %>%
   select(-Var1, -Var2, -Freq.Day) %>%
-  set_colnames(c("patient_ID", "Date", "Sleep", "Wake")) %>%
+  set_colnames(c("patient_ID", "MBLT_Group", "Date", "Sleep", "Wake")) %>%
   mutate(Percent_Sleep = 100 * (Sleep/(Sleep + Wake)),
          Date = as.POSIXct(strptime(Date, format = "%F")),
          DayOfWeek = weekdays(Date),
@@ -186,8 +160,6 @@ WASO <- lapply(1:nrow(patient_noon_days), function(ii) {
 
 results$WASO <- WASO
 ### Sleep Latency
-
-
 
 ## ------ Bedtime ------
 

@@ -535,4 +535,32 @@ actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
 ## ------ Saving RDS ------
 
 saveRDS(acti_files, ".\\Rmd\\Data\\actigraphy_header.rds")
-saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_data.rds")
+saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_static.rds")
+
+## ------ Off Wrist Filtering ------
+
+### Exclude by any 3+ hour window
+off_wrist <- xtabs(~ patient_ID + No_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
+  as.data.frame.table %>%
+  reshape2::dcast(., formula = patient_ID + Noon_Day ~ No_Activity_Change_Window,
+                  value.var = "Freq") %>% 
+  filter((`FALSE` + `TRUE`) > 0) %>%
+  rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
+  mutate(Percent_Off = 100 * Watch_Off/(Watch_On + Watch_Off),
+         Total_Epochs = Watch_On + Watch_Off) %>%
+  dplyr::filter(complete.cases(.)) %>%
+  mutate(Consec_Days = split(., .[, "patient_ID"]) %>%
+           lapply(., function(ii) {
+             rep(rle(ii$Watch_On == 720)$lengths, rle(ii$Watch_On == 720)$lengths)
+           }) %>%
+           do.call("c", .),
+         At_Least_96_Hours_On = Consec_Days >= 3 & Watch_On == 720)
+
+### Merge
+actigraphy <- merge(actigraphy,
+                    off_wrist[,c("patient_ID", "Noon_Day", "At_Least_96_Hours_On")],
+                    by = c("patient_ID", "Noon_Day")) %>%
+  dplyr::filter(At_Least_96_Hours_On == T) %>%
+  arrange(patient_ID, DateTime)
+
+saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_filtered.rds")
