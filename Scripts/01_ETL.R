@@ -9,6 +9,8 @@ library(tidyverse)
 library(lubridate)
 library(maptools)
 library(zoo)
+library(openxlsx)
+library(reshape2)
 # devtools::install_github("opelr/opelR")
 
 # FILE_PATH <- "Data/Raw/"
@@ -18,6 +20,20 @@ FILE_MASK <- "(.*)_New_Analysis.csv"
 acti_files <- data.frame(File = list.files(path = FILE_PATH, pattern = FILE_MASK)) %>%
   mutate(rootpath = normalizePath(paste0(FILE_PATH, File)))
 
+## ------ Patient Catalog ------
+
+catalog <- read.xlsx("Data/Raw/4085_Events_Master_Current.xlsx", 1) %>%
+  select(ID, Group, Actiwatch_ID, Second_Actiwatch_ID, LightPad_Kit)
+
+watch_ids <- melt(select(catalog, -LightPad_Kit), id = c("ID", "Group")) %>%
+  select(-variable) %>%
+  rename(watch_ID = value, patient_ID = ID)
+
+light_box <- catalog[, c("ID", "LightPad_Kit")] %>%
+  rename(patient_ID = ID) %>%
+  mutate(MBLT_Group = ifelse(is.na(LightPad_Kit), F, T)) %>%
+  select(-LightPad_Kit)
+  
 ## ------- Major ETL Functions ------
 
 get_actigraphy_headers <- function(path) {
@@ -51,7 +67,7 @@ get_actigraphy_headers <- function(path) {
   threshold_light <- acti$X2[acti$X1 == "White Light Threshold:"]
   
   # Create data frame with stripped variables
-  header_info <- data.frame(patient_ID = gsub(" ", "_", patient_name)) %>%
+  header_info <- data.frame(watch_ID = gsub(" ", "_", patient_name)) %>%
     mutate(patient_sex = patient_sex,
            patient_DOB = as.POSIXct(strptime(patient_DOB,
                                              format = "%Y-%m-%d")),
@@ -105,9 +121,9 @@ parse_actigraphy_data <- function(path) {
   
   # Get patient name
   nam <- as.character(acti_files$File[acti_files$rootpath == path])
-  acti$patient_ID <- strsplit(nam, "_")[[1]][1]
+  acti$watch_ID <- strsplit(nam, "_")[[1]][1]
   
-  # acti$patient_ID = paste0(nam, collapse = "_")
+  # acti$watch_ID = paste0(nam, collapse = "_")
   
   # Date/Time Calculations
   acti$DateTime = as.POSIXct(strptime(x = paste(acti$Date, acti$Time),
@@ -172,7 +188,7 @@ sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
 actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   mutate(SunPeriod = factor(ifelse(DateTime > Sunrise & DateTime < Sunset, "Day",
                             "Night"))) %>%
-  dplyr::arrange(., patient_ID, DateTime) %>%
+  dplyr::arrange(., watch_ID, DateTime) %>%
   mutate(Activity = opelr::numfac(Activity) + 1,
          Light = opelr::numfac(Light) + 1,
          DAR_Period = factor(ifelse(DateTime <= paste(Date, "06:30:00 PDT") |
@@ -186,7 +202,9 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
                                                "Off_Time", "On_Time")),
          log_Activity = log10(Activity),
          log_Light = log10(Light),
-         Day = factor(Day, levels = unique(Day)))
+         Day = factor(Day, levels = unique(Day))) %>%
+  merge(., watch_ids, by = "watch_ID") %>%
+  merge(., light_box, by = "patient_ID")
 
 rm(sunsetDF)
 
@@ -204,7 +222,7 @@ actiware_sleep <- function(df, column = "Activity", threshold) {
   #   A same-length vector of Sleep and Wake values
   #
   # Example:
-  #   actiware_sleep(dplyr::filter(actigraphy, patient_ID == "A26598.1"), threshold = 40))
+  #   actiware_sleep(dplyr::filter(actigraphy, watch_ID == "A26598.1"), threshold = 40))
   
   x <- df[, column]
   
@@ -242,8 +260,8 @@ moving_window <- function(dataframe, column = "Activity", window, step, FUN, ali
   # Make copy of data
   df <- dataframe
   
-  do.call("c", lapply(unique(df[, "patient_ID"]), function(ii) {
-    data <- df[df[, "patient_ID"] == ii, column]
+  do.call("c", lapply(unique(df[, "watch_ID"]), function(ii) {
+    data <- df[df[, "watch_ID"] == ii, column]
     
     total <- length(data)
     
@@ -378,7 +396,9 @@ smooth_sleep <- function(data, column) {
     df_old <- df
     
     for (ii in 1:nrow(df)) {
-      if (is.na(df$Values[ii]) | is.null(df$Values[ii])) {
+      if (is.null(df$Values[ii])) {
+        df$Values[ii] <- NA
+      } else if (is.na(df$Values[ii])) {
         df$Values[ii] <- NA
       } else if (df$Values[ii] == "Sleep") {
         # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded
@@ -423,13 +443,14 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
       mutate(
+        Sleep_Actiware = actiware_sleep(., "Activity", 40),
         Lotjonen_mean = moving_window(., "Activity", 15, 1, FUN = "mean", "center"),
         Lotjonen_sd = moving_window(., "Activity", 17, 1, FUN = "sd", "center"),
         Lotjonen_ln = log(Activity) + 0.1,
         Lotjonen_Counts = Activity > 10,
         Sleep_Thresh = factor(ifelse(Lotjonen_mean < 100, "Sleep", "Wake")),
-        Activity_diff = do.call("c", lapply(unique(.[, "patient_ID"]), function(ii) {
-          c(NaN, diff(.[.[, "patient_ID"] == ii, "Activity"], 1))})),
+        Activity_diff = do.call("c", lapply(unique(.[, "watch_ID"]), function(ii) {
+          c(NaN, diff(.[.[, "watch_ID"] == ii, "Activity"], 1))})),
         No_Activity_Change_Window = moving_window(., "Activity", 90, 1,
                                                   FUN = "zero_range", "left"),
         No_Activity_Change_Window = na.locf(No_Activity_Change_Window),
@@ -450,7 +471,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
     ii %<>%
       mutate(
         Sleep_Thresh_Smooth = smooth_sleep(., "Sleep_Thresh"),
-        Sleep_Acti_Smooth = smooth_sleep(., "Sleep_Acti"),
+        Sleep_Acti_Smooth = smooth_sleep(., "Sleep_Actiware"),
         Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"),
         Lotjonen_Sleep_2_Smooth = smooth_sleep(., "Lotjonen_Sleep_2")
       )
@@ -477,7 +498,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 ## ------ Light Adherence ------
 
 # Count periods where median Light window > 10,000/5,000 lux/m2 across 15/30 epochs
-actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
+actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
       mutate(
@@ -494,7 +515,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 
 ## ------ Activity Windowing - EE ------
 
-actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
+actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
       mutate(
