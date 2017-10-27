@@ -370,6 +370,12 @@ off_wrist_detector <- function(dataframe, threshold) {
 
 ## ------ Smooth Sleep Function ------
 
+get_rle_df <- function(x) {
+  # Convert vector to RLE object to data.frame
+  data.frame(Values = rle(as.character(x))$values,
+             Lengths = rle(as.character(x))$lengths)
+}
+
 smooth_sleep <- function(data, column) {
   # Recursively smooth sleep staging
   # 
@@ -379,12 +385,6 @@ smooth_sleep <- function(data, column) {
   # 
   # Returns:
   #   Vector containing 'Sleep' and 'Wake', same length as 'column'
-  
-  # Convert vector to RLE object to data.frame
-  get_rle_df <- function(x) {
-    data.frame(Values = rle(as.character(x))$values,
-               Lengths = rle(as.character(x))$lengths)
-  }
   
   # Convert RLE data.frame to a vector
   rle_df_to_vector <- function(df) {rep(df$Values, df$Lengths)}
@@ -437,6 +437,39 @@ smooth_sleep <- function(data, column) {
   return(out)
 }
 
+## ------ Consolidated Sleep/Wake Bouts ------
+
+get_sleep_bouts <- function(x, threshold) {
+  # Determine if span of sleep/wake constitutes a consolidated bout
+  # 
+  # Args:
+  #   x (vector): Vector containing values "Sleep" and "Wake"
+  #   threshold (int): Number of continous bouts required to constitute a bout
+  # 
+  # Returns:
+  #   Vector containing 'Sleep_Bout' and 'Wake_Bout', same length as 'x'
+  
+  # Run smoothing logic on RLE DF
+  sleep_rle <- get_rle_df(x)
+  
+  
+  sleep_bouts <- sapply(1:nrow(sleep_rle), function (jj) {
+    if (sleep_rle$Values[jj] == "Wake" & sleep_rle$Lengths[jj] >= threshold) {
+      o <- "Wake_Bout"
+    } else if (sleep_rle$Values[jj] == "Sleep" & sleep_rle$Lengths[jj] >= threshold) {
+      o <- "Sleep_Bout"
+    } else {
+      o <- NA
+    }
+  }) %>%
+    na.locf(., na.rm = F)
+  
+  sleep_rle["Sleep_Bouts"] <- sleep_bouts
+  
+  output <- rep(sleep_rle$Sleep_Bouts, sleep_rle$Lengths)
+  return(output)
+}
+
 ## ------ Lotjonen Parameters, Off-Wrist Detection, and Sleep Smoothing ------
 
 actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
@@ -475,6 +508,10 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
         Lotjonen_Sleep_Smooth = smooth_sleep(., "Lotjonen_Sleep"),
         Lotjonen_Sleep_2_Smooth = smooth_sleep(., "Lotjonen_Sleep_2")
       )
+    
+    ## Enumerate consolidated sleep/wake bouts
+    ii %<>%
+      mutate(Sleep_Bouts = get_sleep_bouts(Sleep_Acti_Smooth, 8))
     
     # Calculate Noon-Noon days
     which_day_date <- table(ii[, "Day"], ii[, "Date"]) %>%
