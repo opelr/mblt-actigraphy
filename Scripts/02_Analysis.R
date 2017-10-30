@@ -28,15 +28,185 @@ sleep_metrics_parent <- xtabs(~ patient_ID + Sleep_Bouts + Sleep_Acti_Smooth + N
          WASO_Minutes = Wake * 2,
          SE = 100 * Sleep / (Wake + Sleep))
 
-TST <- aggregate(Sleep_Minutes ~ patient_ID, sleep_metrics_parent, mean)
+results$TST <- aggregate(Sleep_Minutes ~ patient_ID, sleep_metrics_parent, mean)
 
-WASO <- aggregate(WASO_Minutes ~ patient_ID, sleep_metrics_parent, mean)
+results$WASO <- aggregate(WASO_Minutes ~ patient_ID, sleep_metrics_parent, mean)
 
-SE <- aggregate(SE ~ patient_ID, sleep_metrics_parent, mean)
+results$SE <- aggregate(SE ~ patient_ID, sleep_metrics_parent, mean)
 
 ## ------ Sleep Latency ------
 
 
+
+## ------ Rhythm Stability ------
+
+
+
+### Interdaily Stability
+calculate_IS <- function(var) {
+  #' Calculate Interdaily Stability for a non-parametric actigraphy variable
+  #' The extent to which the profiles of indivudal days resemble each other
+  #' 
+  #' Args:
+  #'   var (str): Column name present in your 'actigraphy' dataframe
+  #' 
+  #' Returns:
+  #'   Data frame containing IS for every unique patient in your actigraphy data frame.
+  #'    Values range from 0 (Guassian noise) to 1 (perfect IS).
+  #'   
+  #' Reference:
+  #'   Van Someren, Chronobiology International, 1999
+  
+  ## Helper fn
+  fp <- function(x, y) {
+    # Shorthand notation for 'as.formula(paste(.))'
+    return(as.formula(paste(x, "~", y)))
+  }
+  
+  ## Create numerator
+  hourly_mean <- merge(aggregate(fp(var, "patient_ID + Hour"), actigraphy, mean) %>%
+                         rename_(.dots=setNames(names(.), gsub(var, "Hourly_Mean", names(.)))),
+                       aggregate(fp(var, "patient_ID"), actigraphy, mean) %>%
+                         rename_(.dots=setNames(names(.), gsub(var, "Total_Mean", names(.)))),
+                       by = "patient_ID") %>%
+    arrange(patient_ID, Hour) %>%
+    mutate(Variance = (Hourly_Mean - Total_Mean) ** 2)
+  
+  numerator <- merge(aggregate(Variance ~ patient_ID, hourly_mean, sum),
+                     aggregate(fp(var, "patient_ID"), actigraphy, length) %>%
+                       rename_(.dots=setNames(names(.), gsub(var, "n", names(.)))),
+                     by = "patient_ID") %>%
+    mutate(Numerator = n * Variance)
+  
+  ## Denominator
+  total_mean <- merge(actigraphy[, c("patient_ID", "Epoch", var)] %>%
+                        rename_(.dots=setNames(names(.), gsub(var, "Indiv_Data", names(.)))),
+                      aggregate(fp(var, "patient_ID"), actigraphy, mean) %>%
+                        rename_(.dots=setNames(names(.), gsub(var, "Total_Mean", names(.)))),
+                      by = "patient_ID") %>%
+    arrange(patient_ID, opelr::numfac(Epoch)) %>%
+    mutate(Variance = (Indiv_Data - Total_Mean) ** 2)
+  
+  denominator <- aggregate(Variance ~ patient_ID, total_mean, sum) %>%
+    mutate(Denominator = Variance * 24)
+  
+  ## Combine
+  IS <- merge(numerator[, c("patient_ID", "Numerator")],
+              denominator[, c("patient_ID", "Denominator")],
+              by = "patient_ID") %>%
+    mutate(IS = Numerator / Denominator) %>%
+    select(patient_ID, IS)
+  
+  return(IS)
+}
+
+### Intradaily Variability
+calculate_IV <- function(var) {
+  #' Calculate Intradaily Variability for a non-parametric actigraphy variable
+  #' Quantifies how fragmented the rhythm is relative to the overall variance
+  #' 
+  #' Args:
+  #'   var (str): Column name present in your 'actigraphy' dataframe
+  #' 
+  #' Returns:
+  #'   Data frame containing IV for every unique patient in your actigraphy data frame.
+  #'     Values reach near zero for a perfect sine wave, around 2 for Gaussian noise,
+  #'     and may be higher when a definite ultradian component with a period of
+  #'     2h is present.
+  #'   
+  #' Reference:
+  #'   Van Someren, Chronobiology International, 1999
+  
+  ## Helper fn
+  fp <- function(x, y) {
+    # Shorthand notation for 'as.formula(paste(.))'
+    return(as.formula(paste(x, "~", y)))
+  }
+  
+  ## Numerator
+  lagged_var <- actigraphy[, c("patient_ID", "Epoch", var)] %>%
+    split(., .[, "patient_ID"]) %>%
+    lapply(., function(ii) {
+      ii[[paste0(var, "_Lag")]] <- lag(ii[, var], 1)
+      
+      ii %<>%
+        mutate(Lag_1_Variance = (.[, var] - .[, paste0(var, "_Lag")]) ** 2)
+    }) %>%
+    do.call('rbind', .) %>%
+    set_rownames(1:nrow(.))
+  
+  numerator <- merge(aggregate(Lag_1_Variance ~ patient_ID, lagged_var, sum),
+                     aggregate(Epoch ~ patient_ID, lagged_var, length),
+                     by = "patient_ID") %>%
+    mutate(Numerator = Lag_1_Variance * Epoch)
+  
+  ## Denominator
+  total_mean <- merge(actigraphy[, c("patient_ID", "Epoch", var)] %>%
+                        rename_(.dots=setNames(names(.), gsub(var, "Indiv_Data", names(.)))),
+                      aggregate(fp(var, "patient_ID"), actigraphy, mean) %>%
+                        rename_(.dots=setNames(names(.), gsub(var, "Total_Mean", names(.)))),
+                      by = "patient_ID") %>%
+    arrange(patient_ID, opelr::numfac(Epoch)) %>%
+    mutate(Variance = (Indiv_Data - Total_Mean) ** 2)
+  
+  denominator <- merge(aggregate(Variance ~ patient_ID, total_mean, sum),
+                       aggregate(Epoch ~ patient_ID, total_mean, length),
+                       by = "patient_ID") %>%
+    mutate(Denominator = Variance * (Epoch - 1))
+  
+  ## Combine
+  IV <- merge(numerator[, c("patient_ID", "Numerator")],
+              denominator[, c("patient_ID", "Denominator")],
+              by = "patient_ID") %>%
+    mutate(IV = Numerator / Denominator) %>%
+    select(patient_ID, IV)
+  
+  return(IV)
+}
+
+### Domintant Rest Phase Onset
+# DRPO <- function() {
+#' Represents the clock time at which the 5-hr period of lowest activity in
+#' the average 24-hr pattern started
+#   
+# }
+
+results$interdaily_stab <- calculate_IS("Activity")
+results$intradaily_var <- calculate_IV("Activity")
+
+## ------ Relative Amplitude (RA), M10, and L5 ------
+
+calc_rest_phase <- function(len, fn = 'max') {
+  hours <- unique(actigraphy$Hour)[1:(length(unique(actigraphy$Hour)) - (len - 1))]
+  
+  rest_phase <- lapply(hours, function (i) {
+    out <- aggregate(Activity ~ patient_ID + Day,
+                     dplyr::filter(actigraphy, Hour >= i, Hour <= i + (len - 1)),
+                     sum) %>%
+      rename(Activity_Sum = Activity) %>%
+      mutate(Hours = paste0(i, "-", i + (len - 1)),
+             Activity_Mean = Activity_Sum / len)
+  }) %>%
+    do.call("rbind", .)
+  
+  rp2 <- aggregate(Activity_Mean ~ patient_ID + Hours, rest_phase, mean)
+  
+  rp3 <- aggregate(Activity_Mean ~ patient_ID, rp2, function(j) {f <- get(fn); f(j)}) %>%
+    merge(., rp2, by = c("patient_ID", "Activity_Mean"), all_x = T) %>%
+    rename_(.dots=setNames(names(.), tolower(gsub("Hours",
+                                                  paste0(fn, len, "Hours"),
+                                                  names(.)))))
+  
+  return(rp3)
+}
+
+results$RA <- merge(calc_rest_phase(10, 'max') %>%
+                      rename(M10_Activity = activity_mean),
+                    calc_rest_phase(5, 'min')  %>%
+                      rename(L5_Activity = activity_mean),
+                    by = "patient_id") %>%
+  rename(patient_ID = patient_id) %>%
+  mutate(RA = (M10_Activity - L5_Activity) / (M10_Activity + L5_Activity))
 
 ## ------ Percent Time Off-Wrist ------
 
@@ -121,7 +291,8 @@ percent_sleep <- aggregate(Sleep_Thresh_Smooth ~ patient_ID + MBLT_Group + Date 
          Date = as.POSIXct(strptime(Date, format = "%F")),
          DayOfWeek = weekdays(Date),
          Weekend = factor(ifelse(DayOfWeek %in% c("Saturday", "Sunday"),
-                                 "Weekend", "Weekday")))
+                                 "Weekend", "Weekday"))) %>%
+  arrange(patient_ID, Date)
 
 # results$percent_sleep <- percent_sleep
 
@@ -438,177 +609,6 @@ activity_consolidation <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
 
 results$activity_consolidation <- activity_consolidation
 aggregate(Date ~ patient_ID, patient_dates, length)
-
-## ------ Rhythm Stability ------
-
-### Interdaily Stability
-calculate_IS <- function(var) {
-  #' Calculate Interdaily Stability for a non-parametric actigraphy variable
-  #' The extent to which the profiles of indivudal days resemble each other
-  #' 
-  #' Args:
-  #'   var (str): Column name present in your 'actigraphy' dataframe
-  #' 
-  #' Returns:
-  #'   Data frame containing IS for every unique patient in your actigraphy data frame.
-  #'    Values range from 0 (Guassian noise) to 1 (perfect IS).
-  #'   
-  #' Reference:
-  #'   Van Someren, Chronobiology International, 1999
-  
-  ## Helper fn
-  fp <- function(x, y) {
-    # Shorthand notation for 'as.formula(paste(.))'
-    return(as.formula(paste(x, "~", y)))
-  }
-  
-  ## Create numerator
-  hourly_mean <- merge(aggregate(fp(var, "patient_ID + Hour"), actigraphy, mean) %>%
-                         rename_(.dots=setNames(names(.), gsub(var, "Hourly_Mean", names(.)))),
-                       aggregate(fp(var, "patient_ID"), actigraphy, mean) %>%
-                         rename_(.dots=setNames(names(.), gsub(var, "Total_Mean", names(.)))),
-                       by = "patient_ID") %>%
-    arrange(patient_ID, Hour) %>%
-    mutate(Variance = (Hourly_Mean - Total_Mean) ** 2)
-  
-  numerator <- merge(aggregate(Variance ~ patient_ID, hourly_mean, sum),
-                     aggregate(fp(var, "patient_ID"), actigraphy, length) %>%
-                       rename_(.dots=setNames(names(.), gsub(var, "n", names(.)))),
-                     by = "patient_ID") %>%
-    mutate(Numerator = n * Variance)
-  
-  ## Denominator
-  total_mean <- merge(actigraphy[, c("patient_ID", "Epoch", var)] %>%
-                        rename_(.dots=setNames(names(.), gsub(var, "Indiv_Data", names(.)))),
-                      aggregate(fp(var, "patient_ID"), actigraphy, mean) %>%
-                        rename_(.dots=setNames(names(.), gsub(var, "Total_Mean", names(.)))),
-                      by = "patient_ID") %>%
-    arrange(patient_ID, opelr::numfac(Epoch)) %>%
-    mutate(Variance = (Indiv_Data - Total_Mean) ** 2)
-  
-  denominator <- aggregate(Variance ~ patient_ID, total_mean, sum) %>%
-    mutate(Denominator = Variance * 24)
-  
-  ## Combine
-  IS <- merge(numerator[, c("patient_ID", "Numerator")],
-              denominator[, c("patient_ID", "Denominator")],
-              by = "patient_ID") %>%
-    mutate(IS = Numerator / Denominator) %>%
-    select(patient_ID, IS)
-  
-  return(IS)
-}
-
-### Intradaily Variability
-calculate_IV <- function(var) {
-  #' Calculate Intradaily Variability for a non-parametric actigraphy variable
-  #' Quantifies how fragmented the rhythm is relative to the overall variance
-  #' 
-  #' Args:
-  #'   var (str): Column name present in your 'actigraphy' dataframe
-  #' 
-  #' Returns:
-  #'   Data frame containing IV for every unique patient in your actigraphy data frame.
-  #'     Values reach near zero for a perfect sine wave, around 2 for Gaussian noise,
-  #'     and may be higher when a definite ultradian component with a period of
-  #'     2h is present.
-  #'   
-  #' Reference:
-  #'   Van Someren, Chronobiology International, 1999
-
-  ## Helper fn
-  fp <- function(x, y) {
-    # Shorthand notation for 'as.formula(paste(.))'
-    return(as.formula(paste(x, "~", y)))
-  }
-  
-  ## Numerator
-  lagged_var <- actigraphy[, c("patient_ID", "Epoch", var)] %>%
-    split(., .[, "patient_ID"]) %>%
-    lapply(., function(ii) {
-      ii[[paste0(var, "_Lag")]] <- lag(ii[, var], 1)
-      
-      ii %<>%
-        mutate(Lag_1_Variance = (.[, var] - .[, paste0(var, "_Lag")]) ** 2)
-    }) %>%
-    do.call('rbind', .) %>%
-    set_rownames(1:nrow(.))
-  
-  numerator <- merge(aggregate(Lag_1_Variance ~ patient_ID, lagged_var, sum),
-                     aggregate(Epoch ~ patient_ID, lagged_var, length),
-                     by = "patient_ID") %>%
-    mutate(Numerator = Lag_1_Variance * Epoch)
-  
-  ## Denominator
-  total_mean <- merge(actigraphy[, c("patient_ID", "Epoch", var)] %>%
-                        rename_(.dots=setNames(names(.), gsub(var, "Indiv_Data", names(.)))),
-                      aggregate(fp(var, "patient_ID"), actigraphy, mean) %>%
-                        rename_(.dots=setNames(names(.), gsub(var, "Total_Mean", names(.)))),
-                      by = "patient_ID") %>%
-    arrange(patient_ID, opelr::numfac(Epoch)) %>%
-    mutate(Variance = (Indiv_Data - Total_Mean) ** 2)
-  
-  denominator <- merge(aggregate(Variance ~ patient_ID, total_mean, sum),
-                       aggregate(Epoch ~ patient_ID, total_mean, length),
-                       by = "patient_ID") %>%
-    mutate(Denominator = Variance * (Epoch - 1))
-  
-  ## Combine
-  IV <- merge(numerator[, c("patient_ID", "Numerator")],
-              denominator[, c("patient_ID", "Denominator")],
-              by = "patient_ID") %>%
-    mutate(IV = Numerator / Denominator) %>%
-    select(patient_ID, IV)
-  
-  return(IV)
-}
-
-### Domintant Rest Phase Onset
-# DRPO <- function() {
-#' Represents the clock time at which the 5-hr period of lowest activity in
-#' the average 24-hr pattern started
-#   
-# }
-
-interdaily_stab <- calculate_IS("Activity")
-intradaily_var <- calculate_IV("Activity")
-
-
-
-## ------ Relative Amplitude (RA), M10, and L5 ------
-
-calc_rest_phase <- function(len, fn = 'max') {
-  hours <- unique(actigraphy$Hour)[1:(length(unique(actigraphy$Hour)) - (len - 1))]
-  
-  rest_phase <- lapply(hours, function (i) {
-    out <- aggregate(Activity ~ patient_ID + Day,
-                     dplyr::filter(actigraphy, Hour >= i, Hour <= i + (len - 1)),
-                     sum) %>%
-      rename(Activity_Sum = Activity) %>%
-      mutate(Hours = paste0(i, "-", i + (len - 1)),
-             Activity_Mean = Activity_Sum / len)
-  }) %>%
-    do.call("rbind", .)
-  
-  rp2 <- aggregate(Activity_Mean ~ patient_ID + Hours, rest_phase, mean)
-  
-  rp3 <- aggregate(Activity_Mean ~ patient_ID, rp2, function(j) {f <- get(fn); f(j)}) %>%
-    merge(., rp2, by = c("patient_ID", "Activity_Mean"), all_x = T) %>%
-    rename_(.dots=setNames(names(.), tolower(gsub("Hours",
-                                                  paste0(fn, len, "Hours"),
-                                                  names(.)))))
-  
-   return(rp3)
-}
-
-M10 <- calc_rest_phase(10, 'max') %>%
-  rename(M10_Activity = activity_mean)
-L5 <- calc_rest_phase(5, 'min')  %>%
-  rename(L5_Activity = activity_mean)
-
-RA <- merge(M10, L5, by = "patient_id") %>%
-  rename(patient_ID = patient_id) %>%
-   mutate(RA = (M10_Activity - L5_Activity) / (M10_Activity + L5_Activity))
 
 ## ------ Save RDS ------
 
