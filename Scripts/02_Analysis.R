@@ -218,7 +218,7 @@ calc_rest_phase <- function(len, fn = 'max') {
   hours <- unique(actigraphy$Hour)[1:(length(unique(actigraphy$Hour)) - (len - 1))]
   
   rest_phase <- lapply(hours, function (i) {
-    out <- aggregate(Activity ~ patient_ID + Day,
+    out <- aggregate(Activity ~ patient_ID + Noon_Day,
                      dplyr::filter(actigraphy, Hour >= i, Hour <= i + (len - 1)),
                      sum) %>%
       rename(Activity_Sum = Activity) %>%
@@ -226,24 +226,27 @@ calc_rest_phase <- function(len, fn = 'max') {
              Activity_Mean = Activity_Sum / len)
   }) %>%
     do.call("rbind", .)
+
+  # rp2 <- aggregate(Activity_Mean ~ patient_ID + Hours, rest_phase, mean)
   
-  rp2 <- aggregate(Activity_Mean ~ patient_ID + Hours, rest_phase, mean)
-  
-  rp3 <- aggregate(Activity_Mean ~ patient_ID, rp2, function(j) {f <- get(fn); f(j)}) %>%
-    merge(., rp2, by = c("patient_ID", "Activity_Mean"), all_x = T) %>%
+  rp2 <- aggregate(Activity_Mean ~ patient_ID + Noon_Day, rest_phase, max) %>%
+    merge(., rest_phase, by = c("patient_ID", "Noon_Day", "Activity_Mean")) %>%
     rename_(.dots=setNames(names(.), tolower(gsub("Hours",
                                                   paste0(fn, len, "Hours"),
-                                                  names(.)))))
+                                                  names(.))))) %>%
+    rename(patient_ID = patient_id, Noon_Day = noon_day,
+           Activity_Mean = activity_mean) %>%
+    arrange(patient_ID, Noon_Day) %>%
+    select(-activity_sum)
   
-  return(rp3)
+  return(rp2)
 }
 
 results$RA <- merge(calc_rest_phase(10, 'max') %>%
-                      rename(M10_Activity = activity_mean),
+                      rename(M10_Activity = Activity_Mean),
                     calc_rest_phase(5, 'min')  %>%
-                      rename(L5_Activity = activity_mean),
-                    by = "patient_id") %>%
-  rename(patient_ID = patient_id) %>%
+                      rename(L5_Activity = Activity_Mean),
+                    by = c("patient_ID", "Noon_Day")) %>%
   mutate(RA = (M10_Activity - L5_Activity) / (M10_Activity + L5_Activity))
 
 ## ------ Percent Time Off-Wrist ------
