@@ -470,6 +470,71 @@ get_sleep_bouts <- function(x, threshold) {
   return(output)
 }
 
+## ------ Clean Light Adherence ------
+
+clean_adherence <- function(data, column) {
+  # Recursively smooth light/activity adherence
+  # 
+  # Args:
+  #   data (df): Data frame to iterate upon
+  #   column (str): Name of column to call smoothing functions on
+  #   patient (str): Patient name/ID
+  #   date (str): Adherence per day
+  # 
+  # Returns:
+  #   RLE DF of TRUE and FALSE values
+  
+  # Convert RLE object to data.frame
+  get_rle_df <- function(x) {
+    data.frame(Values = rle(as.character(x))$values,
+               Lengths = rle(as.character(x))$lengths)
+  }
+  # Convert RLE data.frame to a vector
+  rle_df_to_vector <- function(df) {
+    rep(df$Values, df$Lengths)
+  }
+  
+  post_process_light <- function(df) {
+    # Copy data for comparison
+    df_old <- df
+    
+    for (ii in 1:nrow(df)) {
+      if (is.null(df$Values[ii])) {
+        df$Values[ii] <- NA
+      } else if (is.na(df$Values[ii])) {
+        df$Values[ii] <- NA
+      } else if (df$Values[ii] == "FALSE") {
+        if (ii == 1) next
+        
+        # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded
+        #    at least 4(2), 10(5), or 15(7) minutes of wake;
+        # 3) Sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes
+        #    of wake was rescored as wake.
+        if ((df$Lengths[ii] == 1 & df$Lengths[ii - 1] >= 2) | 
+            (df$Lengths[ii] == 2 & df$Lengths[ii - 1] >= 6) |
+            (df$Lengths[ii] %in% c(3, 4) & df$Lengths[ii - 1] >= 5 & 
+             df$Lengths[ii + 1] >= 5) |
+            (df$Lengths[ii] == 5 & df$Lengths[ii - 1] >= 10 &
+             df$Lengths[ii + 1] >= 10)) {
+          df$Values[ii] <- "TRUE"
+        }
+      }
+    }
+    
+    if (identical(df_old, df)) {
+      return(df)
+    } else {
+      post_process_light(get_rle_df(rle_df_to_vector(df)))
+    }
+  }
+  
+  rle_df <- get_rle_df(data[, column])
+  
+  out <- post_process_light(rle_df) %>%
+    rle_df_to_vector
+  return(out)
+}
+
 ## ------ Lotjonen Parameters, Off-Wrist Detection, and Sleep Smoothing ------
 
 actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
@@ -540,11 +605,25 @@ actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
     ii %<>% 
       mutate(
         Light_median_15 = moving_window(., column = "Light", 15, 1, FUN = "median", "left"),
-        Light_15_5k = Light_median_15 >= 5000, 
-        Light_15_10k = Light_median_15 >= 10000, 
+        Light_15_5k = Light_median_15 >= 5000,
+        Light_15_10k = Light_median_15 >= 10000,
         Light_median_30 = moving_window(., column = "Light", 31, 1, FUN = "median", "left"),
         Light_30_5k = Light_median_30 >= 5000,
         Light_30_10k = Light_median_30 >= 10000)
+    return(ii)
+  }) %>%
+  do.call("rbind", .) %>%
+  set_rownames(1:nrow(.))
+
+# Smooth Light adherence
+actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
+  lapply(., function(ii) {
+    ii %<>% 
+      mutate(
+        Light_15_5k_smooth = clean_adherence(., "Light_15_5k"),
+        Light_15_10k_smooth = clean_adherence(., "Light_15_10k"),
+        Light_30_5k_smooth = clean_adherence(., "Light_30_5k"),
+        Light_30_10k_smooth = clean_adherence(., "Light_30_10k"))
     return(ii)
   }) %>%
   do.call("rbind", .) %>%
