@@ -18,7 +18,7 @@ results <- list()
 
 #' Creating a parent dataframe used to calculate TST, WASO, and SE
 
-sleep_metrics_parent <- xtabs(~ patient_ID + Sleep_Bouts + Sleep_Acti_Smooth + Noon_Day,
+sleep_metrics <- xtabs(~ patient_ID + Sleep_Bouts + Sleep_Acti_Smooth + Noon_Day,
                               data = actigraphy) %>%
   as.data.frame %>%
   dcast(., patient_ID + Noon_Day + Sleep_Bouts ~ Sleep_Acti_Smooth,
@@ -28,11 +28,7 @@ sleep_metrics_parent <- xtabs(~ patient_ID + Sleep_Bouts + Sleep_Acti_Smooth + N
          WASO_Minutes = Wake * 2,
          SE = 100 * Sleep / (Wake + Sleep))
 
-results$TST <- aggregate(Sleep_Minutes ~ patient_ID, sleep_metrics_parent, mean)
-
-results$WASO <- aggregate(WASO_Minutes ~ patient_ID, sleep_metrics_parent, mean)
-
-results$SE <- aggregate(SE ~ patient_ID, sleep_metrics_parent, mean)
+results$sleep_metrics <- sleep_metrics
 
 ## ------ Sleep Latency ------
 
@@ -226,10 +222,8 @@ calc_rest_phase <- function(len, fn = 'max') {
              Activity_Mean = Activity_Sum / len)
   }) %>%
     do.call("rbind", .)
-
-  # rp2 <- aggregate(Activity_Mean ~ patient_ID + Hours, rest_phase, mean)
   
-  rp2 <- aggregate(Activity_Mean ~ patient_ID + Noon_Day, rest_phase, max) %>%
+  rp2 <- aggregate(Activity_Mean ~ patient_ID + Noon_Day, rest_phase, function(j) {f <- get(fn); f(j)}) %>%
     merge(., rest_phase, by = c("patient_ID", "Noon_Day", "Activity_Mean")) %>%
     rename_(.dots=setNames(names(.), tolower(gsub("Hours",
                                                   paste0(fn, len, "Hours"),
@@ -248,6 +242,148 @@ results$RA <- merge(calc_rest_phase(10, 'max') %>%
                       rename(L5_Activity = Activity_Mean),
                     by = c("patient_ID", "Noon_Day")) %>%
   mutate(RA = (M10_Activity - L5_Activity) / (M10_Activity + L5_Activity))
+
+## ------ Activity Consolidation ------
+
+### Consolidated Bouts
+calc_activity_consolidation <- function(column) {
+  
+  get_rle_df <- function(x) {
+    data.frame(Values = rle(as.character(x))$values,
+               Lengths = rle(as.character(x))$lengths)
+  }
+  
+  patient_dates <- xtabs(~ patient_ID + Date, actigraphy) %>%
+    as.data.frame %>%
+    filter(Freq > 0) %>%
+    rename(Epochs = Freq) %>%
+    arrange(patient_ID, Date)
+  
+  activity_consolidation_parent <- lapply(1:nrow(patient_dates), function(ii) {
+    x <- actigraphy[actigraphy$patient_ID == patient_dates$patient_ID[ii] &
+                      actigraphy$Date == patient_dates$Date[ii], column]
+    
+    cbind(get_rle_df(x), patient_dates$patient_ID[ii], patient_dates$Date[ii])
+  }) %>%
+    do.call("rbind", .) %>%
+    dplyr::filter(complete.cases(.)) %>%
+    set_colnames(c("Values", "Lengths", "patient_ID", "Date"))
+  
+  activity_consolidation <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
+                                            activity_consolidation_parent, sum),
+                                  aggregate(Lengths ~ patient_ID + Date + Values,
+                                            activity_consolidation_parent, length) %>%
+                                    rename(Bouts = Lengths),
+                                  by = c("patient_ID", "Date", "Values")) %>%
+    filter(Values == TRUE) %>%
+    arrange(patient_ID, Date) %>%
+    mutate(Minutes = 30 * Bouts + 2 * (Lengths - Bouts),
+           ABL = Minutes/Bouts)
+  
+  return(activity_consolidation)
+}
+
+results$activity_consolidation <- calc_activity_consolidation("Activity_15_2k")
+
+## ------ Light Adherence ------
+
+calc_light_adherence <- function(column) {
+  
+  get_rle_df <- function(x) {
+    data.frame(Values = rle(as.character(x))$values,
+               Lengths = rle(as.character(x))$lengths)
+  }
+  
+  patient_dates <- xtabs(~ patient_ID + Noon_Day, actigraphy) %>%
+    as.data.frame %>%
+    filter(Freq > 0) %>%
+    rename(Epochs = Freq) %>%
+    arrange(patient_ID, Noon_Day)
+  
+  light_adherence_parent <- lapply(1:nrow(patient_dates), function(ii) {
+    pat_ID <- patient_dates$patient_ID[ii]
+    noon_day <- patient_dates$Noon_Day[ii]
+    
+    dat <- filter(actigraphy, patient_ID == pat_ID, Noon_Day == noon_day) %>%
+      select(starts_with(column)) %>%
+      unlist %>% 
+      get_rle_df %>%
+      data.frame(patient_ID = pat_ID, Noon_Day = noon_day, .)
+    
+    return(dat)
+  }) %>%
+    do.call("rbind", .) %>%
+    dplyr::filter(complete.cases(.))
+  
+  light_adherence <- merge(aggregate(Lengths ~ patient_ID + Noon_Day + Values,
+                                     light_adherence_parent, sum),
+                           aggregate(Lengths ~ patient_ID + Noon_Day + Values, light_adherence_parent,
+                                     length) %>%
+                             rename(Bouts = Lengths),
+                           by = c("patient_ID", "Noon_Day", "Values")) %>%
+    # mutate(Values = as.logical(as.numeric(Values))) %>%
+    filter(Values == TRUE) %>%
+    arrange(patient_ID, Noon_Day) %>%
+    mutate(Minutes = 30 * Bouts + 2 * (Lengths - Bouts),
+           ABL = Minutes/Bouts)
+  
+  return(light_adherence)
+}
+
+results$light_adherence <- calc_light_adherence("Light_15_5k_smooth")
+
+## ------ Median Light Exposure -------
+
+results$median_light_exposure <- cbind(aggregate(Light ~ patient_ID + Hour,
+                                                 actigraphy, median),
+                                       aggregate(Light ~ patient_ID + Hour,
+                                                 actigraphy, opelr::sem)[3] %>%
+                                         rename(SEM = Light)) %>%
+  mutate(ymax = Light + SEM,
+         ymin = Light - SEM) %>%
+  arrange(patient_ID, Hour)
+
+## ------ Average Light Exposure during Lightbox Period ------
+
+actigraphy %<>% mutate(Prescribed_Time = Hour %in% 6:10)
+
+avg_light_exposure <- cbind(aggregate(Light ~ patient_ID + Prescribed_Time,
+                                      actigraphy, mean),
+                            aggregate(Light ~ patient_ID + Prescribed_Time,
+                                      actigraphy, opelr::sem)[3] %>%
+                              rename(SEM = Light)) %>%
+  mutate(ymax = Light + SEM,
+         ymin = Light - SEM)
+
+results$avg_light_exposure_ <- avg_light_exposure
+
+ggplot(avg_light_exposure, aes(patient_ID, Light, group = Prescribed_Time)) +
+  geom_bar(aes(fill = Prescribed_Time), stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymax = ymax, ymin = ymin, group = Prescribed_Time), 
+                width = 0.5, position = position_dodge(0.9)) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  labs(y = "Light Exposure", x = "")
+
+
+
+
+
+
+
+
+## ----------------------------------------------------------------------------
+
+## ------ Major Metrics by Patient by Day ------
+
+major_results <- merge(results$sleep_metrics %>%
+                         select(-Sleep_Bouts, -Sleep, -Wake),
+                       results$interdaily_stab,
+                       by = c("patient_ID", "Noon_Day"), all.x = T) %>%
+  merge(., results$intradaily_var, by = c("patient_ID", "Noon_Day") , all.x = T) %>%
+  merge(., results$RA, by = c("patient_ID", "Noon_Day"), all.x = T) %>%
+  arrange(patient_ID, Noon_Day)
+
+results$major_results <- major_results
 
 ## ------ Percent Time Off-Wrist ------
 
@@ -271,7 +407,7 @@ DAR_parent <- aggregate(Activity ~ patient_ID + DAR_Period + Day, actigraphy, me
   merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
         by = c("patient_ID", "Day_number"))
 
-DAR_child <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
+DAR <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
                    aggregate(DAR ~ patient_ID, DAR_parent, function(X) {
                      opelr::sem(X, na.rm = T)
                     })[2]) %>%
@@ -279,7 +415,7 @@ DAR_child <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
   mutate(ymax = DAR + SEM,
          ymin = DAR - SEM)
 
-results$DAR <- DAR_child
+results$DAR <- DAR
 
 ### Daytime is defined as 7:00 AM - 7 PM
 DAR_77_parent <- aggregate(Activity ~ patient_ID + DAR_77 + Day, actigraphy, mean) %>%
@@ -290,7 +426,7 @@ DAR_77_parent <- aggregate(Activity ~ patient_ID + DAR_77 + Day, actigraphy, mea
   merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
         by = c("patient_ID", "Day_number"))
 
-DAR_77_child <- cbind(aggregate(DAR ~ patient_ID, DAR_77_parent, mean),
+DAR_77 <- cbind(aggregate(DAR ~ patient_ID, DAR_77_parent, mean),
                    aggregate(DAR ~ patient_ID, DAR_77_parent, function(X) {
                      opelr::sem(X, na.rm = T)
                    })[2]) %>%
@@ -298,7 +434,7 @@ DAR_77_child <- cbind(aggregate(DAR ~ patient_ID, DAR_77_parent, mean),
   mutate(ymax = DAR + SEM,
          ymin = DAR - SEM)
 
-results$DAR_77 <- DAR_77_child
+results$DAR_77 <- DAR_77
 
 ## ------ Nighttime sleep duration ------
 # `Line` is being used as a dummy variable
@@ -463,130 +599,6 @@ average_bedtime <- aggregate(cbind(Bedtime_from_Noon, Waketime_from_Noon) ~ pati
 
 results$avg_bedtime <- average_bedtime
 
-## ------ Light Adherence ------
-
-clean_adherence <- function(data, column, patient, date) {
-  # Recursively smooth light/activity adherence
-  # 
-  # Args:
-  #   data (df): Data frame to iterate upon
-  #   column (str): Name of column to call smoothing functions on
-  #   patient (str): Patient name/ID
-  #   date (str): Adherence per day
-  # 
-  # Returns:
-  #   RLE DF of TRUE and FALSE values
-  
-  # Convert RLE object to data.frame
-  get_rle_df <- function(x) {
-    data.frame(Values = rle(as.character(x))$values,
-               Lengths = rle(as.character(x))$lengths)
-  }
-  # Convert RLE data.frame to a vector
-  rle_df_to_vector <- function(df) {
-    rep(df$Values, df$Lengths)
-  }
-  
-  post_process_light <- function(df) {
-    # Copy data for comparison
-    df_old <- df
-    
-    for (ii in 1:nrow(df)) {
-      if (is.na(df$Values[ii])) {
-        df$Values[ii] <- NA
-      } else if (df$Values[ii] == "FALSE") {
-        if (ii == 1) next
-        
-        # 2) Sleep of 1, 3, or 4 minutes was rescored as wake if it preceded
-        #    at least 4(2), 10(5), or 15(7) minutes of wake;
-        # 3) Sleep of 6 or 10 minutes surrounded by at least 10 or 20 minutes
-        #    of wake was rescored as wake.
-        if ((df$Lengths[ii] == 1 & df$Lengths[ii - 1] >= 2) | 
-            (df$Lengths[ii] == 2 & df$Lengths[ii - 1] >= 6) |
-            (df$Lengths[ii] %in% c(3, 4) & df$Lengths[ii - 1] >= 5 & 
-             df$Lengths[ii + 1] >= 5) |
-            (df$Lengths[ii] == 5 & df$Lengths[ii - 1] >= 10 &
-             df$Lengths[ii + 1] >= 10)) {
-          df$Values[ii] <- "TRUE"
-        }
-      }
-    }
-    
-    if (identical(df_old, df)) {
-      return(df)
-    } else {
-      post_process_light(get_rle_df(rle_df_to_vector(df)))
-    }
-  }
-  
-  vec <- data[data$patient_ID == patient & data$Date == date, column]
-  rle_df <- get_rle_df(vec)
-  
-  out <- post_process_light(rle_df) %>%
-    cbind(., patient, date)
-}
-
-patient_dates <- table(actigraphy$patient_ID, actigraphy$Date) %>%
-  as.data.frame(.) %>%
-  filter(Freq > 0) %>%
-  set_colnames(c("patient_ID", "Date", "Epochs")) %>%
-  arrange(patient_ID, Date)
-
-light_adherence_parent <- lapply(1:nrow(patient_dates), function(ii) {
-  clean_adherence(actigraphy, "Light_15_10k", patient_dates$patient_ID[ii],
-                        patient_dates$Date[ii])
-}) %>%
-  do.call("rbind", .) %>%
-  dplyr::filter(complete.cases(.)) %>%
-  rename(patient_ID = patient, Date = date)
-  
-light_adherence <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
-                                   light_adherence_parent, sum),
-      aggregate(Lengths ~ patient_ID + Date + Values, light_adherence_parent,
-                length) %>%
-        rename(Bouts = Lengths),
-      by = c("patient_ID", "Date", "Values")) %>%
-  filter(Values == TRUE) %>%
-  arrange(patient_ID, Date) %>%
-  mutate(Minutes = 30 * Bouts + 2 * (Lengths - Bouts),
-         ABL = Minutes/Bouts)
-
-results$light_adherence <- light_adherence
-results$patient_dates <- patient_dates
-
-## ------ Median Light Exposure -------
-
-median_light_exposure <- cbind(aggregate(Light ~ patient_ID + Hour,
-                                      actigraphy, median),
-                            aggregate(Light ~ patient_ID + Hour,
-                                      actigraphy, opelr::sem)[3] %>%
-                              rename(SEM = Light)) %>%
-  mutate(ymax = Light + SEM,
-         ymin = Light - SEM)
-
-results$median_light_exposure <- median_light_exposure
-
-## ------ Average Light Exposure during Lightbox Period ------
-
-actigraphy %<>% mutate(Prescribed_Time = Hour %in% 6:10)
-
-avg_light_exposure <- cbind(aggregate(Light ~ patient_ID + Prescribed_Time,
-                                         actigraphy, mean),
-                               aggregate(Light ~ patient_ID + Prescribed_Time,
-                                         actigraphy, opelr::sem)[3] %>%
-                                 rename(SEM = Light)) %>%
-  mutate(ymax = Light + SEM,
-         ymin = Light - SEM)
-
-results$avg_light_exposure_ <- avg_light_exposure
-
-ggplot(avg_light_exposure, aes(patient_ID, Light, group = Prescribed_Time)) +
-  geom_bar(aes(fill = Prescribed_Time), stat = "identity", position = "dodge") +
-  geom_errorbar(aes(ymax = ymax, ymin = ymin, group = Prescribed_Time), 
-                width = 0.5, position = position_dodge(0.9)) + 
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  labs(y = "Light Exposure", x = "")
-
 ## ------ Sleep Duration vs. Light/Activity per day ------
 
 compare <- merge(percent_sleep, aggregate(Light ~ patient_ID + Date + Day, actigraphy, median),
@@ -619,37 +631,6 @@ radial_24 <- dplyr::filter(radial_intermediary, Hour == 0) %>%
 radial <- rbind(radial_intermediary, radial_24)
   
 results$radial_plots <- radial
-
-## ------ Activity EE Metrics ------
-
-### Consolidated Bouts
-activity_consolidation_parent <- lapply(1:nrow(patient_dates), function(ii) {
-  get_rle_df <- function(x) {
-    data.frame(Values = rle(as.character(x))$values,
-               Lengths = rle(as.character(x))$lengths)
-  }
-  x <- actigraphy$Activity_15_2k[actigraphy$patient_ID == patient_dates$patient_ID[ii] &
-                            actigraphy$Date == patient_dates$Date[ii]]
-  
-  cbind(get_rle_df(x), patient_dates$patient_ID[ii], patient_dates$Date[ii])
-}) %>%
-  do.call("rbind", .) %>%
-  dplyr::filter(complete.cases(.)) %>%
-  set_colnames(c("Values", "Lengths", "patient_ID", "Date"))
-
-activity_consolidation <- merge(aggregate(Lengths ~ patient_ID + Date + Values,
-                                          activity_consolidation_parent, sum),
-                         aggregate(Lengths ~ patient_ID + Date + Values, activity_consolidation_parent,
-                                   length) %>%
-                           rename(Bouts = Lengths),
-                         by = c("patient_ID", "Date", "Values")) %>%
-  filter(Values == TRUE) %>%
-  arrange(patient_ID, Date) %>%
-  mutate(Minutes = 30 * Bouts + 2 * (Lengths - Bouts),
-         ABL = Minutes/Bouts)
-
-results$activity_consolidation <- activity_consolidation
-aggregate(Date ~ patient_ID, patient_dates, length)
 
 ## ------ Save RDS ------
 
