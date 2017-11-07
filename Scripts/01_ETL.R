@@ -655,10 +655,16 @@ saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_static.rds")
 
 ## ------ Off Wrist Filtering ------
 
+#' TODO: How should the overlap of data be handled? Currently we're throwing
+#' out two days per patient in the middle of recording, which seems wasteful.
+#' I'm thinking it would be good to record the exact time a new watch is
+#' placed on the wrist of a CCT patient, and we can cut the tail/head of watch
+#' #1/#2 at that point, respectively. 
+
 ### Exclude by any 3+ hour window
-off_wrist <- xtabs(~ patient_ID + No_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
+off_wrist <- xtabs(~ patient_ID + No_Activity_Change_Window + Date, data = actigraphy) %>%
   as.data.frame.table %>%
-  reshape2::dcast(., formula = patient_ID + Noon_Day ~ No_Activity_Change_Window,
+  reshape2::dcast(., formula = patient_ID + Date ~ No_Activity_Change_Window,
                   value.var = "Freq") %>% 
   filter((`FALSE` + `TRUE`) > 0) %>%
   rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
@@ -674,8 +680,8 @@ off_wrist <- xtabs(~ patient_ID + No_Activity_Change_Window + Noon_Day, data = a
 
 ### Merge
 actigraphy <- merge(actigraphy,
-                    off_wrist[,c("patient_ID", "Noon_Day", "At_Least_96_Hours_On")],
-                    by = c("patient_ID", "Noon_Day")) %>%
+                    off_wrist[,c("patient_ID", "Date", "At_Least_96_Hours_On")],
+                    by = c("patient_ID", "Date")) %>%
   dplyr::filter(At_Least_96_Hours_On == T) %>%
   arrange(patient_ID, DateTime)
 
