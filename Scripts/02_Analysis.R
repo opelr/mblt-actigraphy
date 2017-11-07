@@ -37,7 +37,7 @@ results$sleep_metrics <- xtabs(~ patient_ID + Sleep_Bouts + Sleep_Acti_Smooth + 
 ### Interdaily Stability
 calculate_IS <- function(var, patient) {
   #' Calculate Interdaily Stability for a non-parametric actigraphy variable
-  #' The extent to which the profiles of indivudal days resemble each other
+  #' The extent to which the profiles of individual days resemble each other
   #' 
   #' Args:
   #'   var (str): Column name present in your 'actigraphy' dataframe
@@ -363,8 +363,6 @@ patient_catalog <- xtabs(~ patient_ID + Noon_Day + Group, actigraphy) %>%
                         labels = c("Ctrl", "CCT"))) %>%
   select(-Freq)
 
-
-
 major_results <-
   merge(results$sleep_metrics %>%
           select(-Sleep_Bouts, -Sleep, -Wake),
@@ -377,11 +375,90 @@ major_results <-
   merge(., results$light_adherence, by = c("patient_ID", "Noon_Day"), all.x = T) %>%
   merge(., results$activity_consolidation, by = c("patient_ID", "Noon_Day"), all.x = T) %>%
   merge(., patient_catalog, by = c("patient_ID", "Noon_Day"), all.x = T) %>%
-  arrange(patient_ID, Noon_Day)
+  arrange(patient_ID, Noon_Day) %>%
+  mutate(Noon_Day = as.numeric(as.character(Noon_Day)))
 
 results$major_results <- major_results
 
 ## ----------------------------------------------------------------------------
+
+## ------ First/Middle/Last Creation ------ 
+
+find_closest <- function(x, num) {
+  #' Find Price is Right style number
+  x_sort <- x[order(x)]
+  i <- findInterval(num, x_sort)
+  return(x_sort[i])
+}
+
+results$mj_28_days <- merge(aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) min(x) + 2) %>%
+        rename(Min_Day = Noon_Day),
+        aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) find_closest(x, 7)) %>% 
+          rename(Middle_Day = Noon_Day),
+      by = "patient_ID") %>%
+  merge(., aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) find_closest(x, 28) - 1) %>% 
+          rename(Max_Day = Noon_Day),
+        by = "patient_ID") %>%
+  arrange(patient_ID)
+
+mj_28 <- split(results$major_results, results$major_results$patient_ID) %>%
+  lapply(., function(ii) {
+    ID <- unique(ii$patient_ID)
+    dayz <- unlist(results$mj_28_days[results$mj_28_days$patient_ID == ID, ][-1])
+    ii <- ii[ii$Noon_Day %in% dayz, ]
+    ii$Time_Point <- c("Initial", "Base_End", "Final")
+    return(ii)
+}) %>%
+  do.call("rbind", .) %>%
+  set_rownames(1:nrow(.))
+
+results$mj_28 <- mj_28
+
+## ------ First/Middle/Last Analysis ------ 
+
+FML_vars <- c("Sleep_Minutes", "WASO_Minutes", "SE", "Activity_IS",
+              "Activity_IV", "Light_IS", "Light_IV", "RA")
+
+lapply(FML_vars, function(j) {
+  form <- as.formula(paste(j, "~ Group * Time_Point"))
+  ANOV <- anova(lm(form, mj_28))
+  
+  sf <- function(num) {
+    signif(num, 3)
+  }
+  
+  data.frame(IV = j,
+             Group_F = sf(ANOV$`F value`[1]),
+             Group_p = sf(ANOV$`Pr(>F)`[1]),
+             Time_F = sf(ANOV$`F value`[2]),
+             Time_p = sf(ANOV$`Pr(>F)`[2]),
+             Int_F = sf(ANOV$`F value`[3]),
+             Int_p = sf(ANOV$`Pr(>F)`[3]))
+  
+}) %>%
+  do.call("rbind", .)
+
+## ------ First/Middle/Last Plot ------
+
+FML_plot <- function(var) {
+  i_1 <- select(mj_28, one_of(var), Group, Time_Point)
+  
+  i_2 <- merge(aggregate(. ~ Group + Time_Point, i_1, mean),
+               aggregate(. ~ Group + Time_Point, i_1, sciplot::se) %>%
+                 set_colnames(c("Group", "Time_Point", "SEM")),
+               by = c("Group", "Time_Point")) %>%
+    mutate(ymax = .[, var] + SEM,
+           ymin = .[, var] - SEM,
+           Time_Point = factor(Time_Point, levels = c("Initial", "Base_End", "Final")))
+  
+  p <- ggplot(i_2, aes_string("Group", var, fill = "Time_Point")) +
+    geom_bar(position = "dodge", stat = "identity", colour='black') + 
+    geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2, position=position_dodge(.9))
+  
+  plot(p)
+}
+
+FML_plot(FML_vars[1])
 
 ## ------ Time Series Analysis ------
 
