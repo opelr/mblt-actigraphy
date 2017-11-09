@@ -26,6 +26,9 @@ catalog <- read.xlsx("Data/Raw/4085_Events_Master_Current.xlsx", 1) %>%
   select(ID, Group, Actiwatch_ID, Second_Actiwatch_ID, LightPad_Kit)
 
 watch_ids <- melt(select(catalog, -LightPad_Kit), id = c("ID", "Group")) %>%
+  mutate(Watch_Assign = factor(variable,
+                               levels = c("Actiwatch_ID", "Second_Actiwatch_ID"),
+                               labels = c("Primary", "Secondary"))) %>%
   select(-variable) %>%
   rename(watch_ID = value, patient_ID = ID)
 
@@ -33,8 +36,40 @@ light_box <- catalog[, c("ID", "LightPad_Kit")] %>%
   rename(patient_ID = ID) %>%
   mutate(MBLT_Group = ifelse(is.na(LightPad_Kit), F, T)) %>%
   select(-LightPad_Kit)
-  
-## ------- Major ETL Functions ------
+
+## ------ PTSD Status from PCL-5 ------
+
+survSums <- function(cols) {
+  ifelse(apply(PCL[, cols], 1, FUN = function(x) all(is.na(x))) == TRUE,
+         NA, rowSums(PCL[, cols], na.rm = T))
+}
+
+PCL <- read.csv("Data/Raw/4085_Baseline_PCL.csv") %>% 
+  select(-redcap_event_name, -pcl5_notes, -pcl5_complete) %>%
+  rename(patient_ID = record_id) %>%
+  mutate(pcl_sum = rowSums(.[, grepl("pcl5_[0-9]", colnames(.))]))
+
+pcl_b_cols <- colnames(PCL)[grepl('pcl5_[1-5]{1}', colnames(PCL))]
+pcl_c_cols <- colnames(PCL)[grepl('pcl5_[6-7]{1}', colnames(PCL))]
+pcl_d_cols <- colnames(PCL)[grepl('pcl5_([8-9]{1}|1[0-4]{1})', colnames(PCL))]
+pcl_e_cols <- colnames(PCL)[grepl('pcl5_(1[5-9]|20)', colnames(PCL))]
+
+PCL %<>%
+  mutate(pcl_b_intrusion = survSums(pcl_b_cols),
+         pcl_c_avoidance = survSums(pcl_c_cols),
+         pcl_d_mood_cognition = survSums(pcl_d_cols),
+         pcl_e_arousal_activity = survSums(pcl_e_cols),
+         cluster_ptsd =
+           rowSums(.[, pcl_b_cols] >= 2, na.rm = T) >= 1 &
+           rowSums(.[, pcl_c_cols] >= 2, na.rm = T) >= 1 &
+           rowSums(.[, pcl_d_cols] >= 2, na.rm = T) >= 2 &
+           rowSums(.[, pcl_e_cols] >= 2, na.rm = T) >= 2,
+         Group_PTSD = factor(ifelse(cluster_ptsd == T & pcl_sum >= 33,
+                                    "PTSD", "No_PTSD")))
+
+rm(list = regmatches(ls(), regexpr("pcl_[a-z]_cols", ls())))
+
+## ------ Major ETL Functions ------
 
 get_actigraphy_headers <- function(path) {
   # Strips header information from exported Actiware CSV files
@@ -180,11 +215,13 @@ acti_files <- do.call("rbind", lapply(acti_files$rootpath, get_actigraphy_header
 actigraphy <- do.call("rbind", lapply(acti_files$rootpath, parse_actigraphy_data)) %>%
   mutate(Date = as.character(Date))
 
+# Get sunrise and sunset times
 sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
   get_sun_times(lat = 45.5231, long = -122.6765, date = as.character(x))
   })) %>%
   mutate(Date = as.character(Date))
 
+# Merge all helper DFs wtih major DF
 actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   mutate(SunPeriod = factor(ifelse(DateTime > Sunrise & DateTime < Sunset, "Day",
                             "Night"))) %>%
@@ -204,9 +241,62 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
          log_Light = log10(Light),
          Day = factor(Day, levels = unique(Day))) %>%
   merge(., watch_ids, by = "watch_ID") %>%
-  merge(., light_box, by = "patient_ID")
+  merge(., light_box, by = "patient_ID") %>%
+  merge(., PCL[, c("patient_ID", "Group_PTSD")], by = "patient_ID")
 
-rm(sunsetDF)
+
+rm(list = c("PCL", "sunsetDF", "light_box"))
+
+## ------ Filter out Overlapping Dates ------
+
+#' Will be good to put this data.frame into a CSV when we have more CCT
+#' patients, but this works fine until January.
+
+overlap_dates <- data.frame(patient_ID = c(10, 11, 13, 14),
+                            DateTimePrimary = as.POSIXct("2017-10-13 10:58:00",
+                                                         tz = "America/Los_Angeles")) %>%
+  mutate(DateTimeSecondary = DateTimePrimary + minutes(2))
+
+actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
+  lapply(., function (j) {
+    
+    pat_ID <- unique(j$patient_ID)
+    
+    if (pat_ID %in% overlap_dates$patient_ID) {
+      j <- split(j, j$Watch_Assign) %>%
+        lapply(., function (ii) {
+          if (unique(ii$Watch_Assign) == "Primary") {
+            ii <- filter(ii, DateTime <= overlap_dates$DateTimePrimary[overlap_dates$patient_ID == pat_ID])
+          } else if (unique(ii$Watch_Assign) == "Secondary") {
+            ii <- filter(ii, DateTime >= overlap_dates$DateTimeSecondary[overlap_dates$patient_ID == pat_ID])
+          }
+        }) %>% 
+        do.call("rbind", .)
+    }
+    return(j)
+  }) %>%
+  do.call("rbind", .)
+
+## ------ Determining Day Number by Date ------
+
+#' Day number breaks when we give patients multiple watches, as each watch
+#' starts at 1. Instead, we'll enumerate the ordered dates for each patient to
+#' determine day number.
+
+updated_day_date <- xtabs(~ patient_ID + Date, actigraphy) %>%
+  as.data.frame %>%
+  filter(Freq > 0) %>%
+  arrange(patient_ID, Date) %>%
+  mutate(Day = lapply(rle(as.numeric(as.character(.[, "patient_ID"])))$lengths,
+                      function(i) seq(1, i)) %>%
+           do.call('c', .)) %>%
+  select(-Freq)
+
+actigraphy %<>%
+  select(-Day) %>%
+  merge(., updated_day_date, by = c("patient_ID", "Date"))
+
+rm(updated_day_date)
 
 ## ------ Sleep Staging Functions ------
 
