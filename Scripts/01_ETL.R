@@ -13,7 +13,6 @@ library(openxlsx)
 library(reshape2)
 # devtools::install_github("opelr/opelR")
 
-# FILE_PATH <- "Data/Raw/"
 FILE_PATH <- "D:/data/acquired_data/human/h4085/Actigraphy/CSV/"
 FILE_MASK <- "(.*)_New_Analysis.csv"
 
@@ -774,5 +773,19 @@ actigraphy <- merge(actigraphy,
                     by = c("patient_ID", "Date")) %>%
   dplyr::filter(At_Least_96_Hours_On == T) %>%
   arrange(patient_ID, DateTime)
+
+## ------ Hand-Added Medical History -----
+
+CCT_medHist <- data.frame(patient_ID = c(10, 11, 12, 13, 14, 15, 16),
+                          Sex = c("F", "M", "F", "F", "M", "M", "M"),
+                          PTSD_CC = c(T, T, F, T, F, T, T),
+                          TBI_CC = c(F, F, F, F, F, T, F),
+                          Depression_CC = c(F, F, F, F, T, F, F),
+                          Anxiety_CC = c(T, F, F, F, F, F, F),
+                          OSA_CC = c(F, F, F, F, F, T, T))
+
+actigraphy %<>% merge(., CCT_medHist, "patient_ID")
+
+## ------ Save RDS ------
 
 saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_filtered.rds")
