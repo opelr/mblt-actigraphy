@@ -68,6 +68,44 @@ PCL %<>%
 
 rm(list = regmatches(ls(), regexpr("pcl_[a-z]_cols", ls())))
 
+## ------ Patient Chronotype from rMEP ------
+
+strip_waketime <- function(x) {
+  wake_time <- strsplit(as.character(x), "-")[[1]][1] %>%
+    # unlist %>%
+    # .[seq(1, length(.) - 1, 2)] %>%
+    strptime(., "%I:%M %p", tz = "America/Los_Angeles") %>%
+    as.character %>%
+    substr(., 12, nchar(.))
+  
+  if (is.na(wake_time)) {
+    return(NA)
+  } else {
+    return(paste0(wake_time, " PST"))
+  }
+}
+
+waketime_plus <- function(x, n) {
+  if (is.na(x)) {
+    return(NA)
+  } else {
+    
+    hours_out <- strsplit(x, ":")[[1]][1] %>%
+      as.numeric %>%
+      add(., n)
+    
+    return(gsub(strsplit(x, ":")[[1]][1], hours_out, x))
+  }
+}
+
+rMEQ <- read.csv("Data/Raw/4085_Baseline_rMEQ.csv") %>%
+  set_colnames(c("patient_ID", "Event_Name", "Wake_Time", "Refreshed",
+                 "Bed_Time", "Best_Time", "Chronotype", "Complete")) %>%
+  mutate(DAR_Wake_Time = mapply(Wake_Time, FUN = strip_waketime),
+         DAR_Bed_Time = mapply(DAR_Wake_Time, FUN = function(i) waketime_plus(i, 12)),
+         DAR_Light_Box_Time = mapply(DAR_Wake_Time, FUN = function(i) waketime_plus(i, 3))) %>%
+  select(patient_ID, DAR_Wake_Time, DAR_Bed_Time, DAR_Light_Box_Time)
+
 ## ------ Major ETL Functions ------
 
 get_actigraphy_headers <- function(path) {
@@ -227,22 +265,22 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   dplyr::arrange(., watch_ID, DateTime) %>%
   mutate(Activity = opelr::numfac(Activity) + 1,
          Light = opelr::numfac(Light) + 1,
-         DAR_Period = factor(ifelse(DateTime <= paste(Date, "06:30:00 PDT") |
-                                    DateTime >= paste(Date, "22:59:59 PDT"),
-                                    "Night", "Day")),
          DAR_77 = factor(ifelse(DateTime <= paste(Date, "07:00:00 PDT") |
                                   DateTime >= paste(Date, "18:59:59 PDT"),
                                 "Night", "Day")),
-         Instructed_Light_Time = factor(ifelse(DateTime <= paste(Date, "06:30:00 PDT") |
-                                                 DateTime >= paste(Date, "08:59:59 PDT"),
-                                               "Off_Time", "On_Time")),
          log_Activity = log10(Activity),
          log_Light = log10(Light),
          Day = factor(Day, levels = unique(Day))) %>%
   merge(., watch_ids, by = "watch_ID") %>%
   merge(., light_box, by = "patient_ID") %>%
-  merge(., PCL[, c("patient_ID", "Group_PTSD")], by = "patient_ID")
-
+  merge(., PCL[, c("patient_ID", "Group_PTSD")], by = "patient_ID") %>%
+  merge(., rMEQ, by = "patient_ID") %>%
+  mutate(DAR = factor(ifelse(DateTime <= paste(Date, DAR_Wake_Time) |
+                               DateTime >= paste(Date, DAR_Bed_Time),
+                             "Night", "Day")),
+         Light_Box_Period = factor(ifelse(DateTime <= paste(Date, DAR_Wake_Time) |
+                               DateTime >= paste(Date, DAR_Light_Box_Time),
+                             "Non_Light", "Light")))
 
 rm(list = c("PCL", "sunsetDF", "light_box"))
 
@@ -784,7 +822,7 @@ CCT_medHist <- data.frame(patient_ID = c(10, 11, 12, 13, 14, 15, 16),
                           Anxiety_CC = c(T, F, F, F, F, F, F),
                           OSA_CC = c(F, F, F, F, F, T, T))
 
-actigraphy %<>% merge(., CCT_medHist, "patient_ID")
+actigraphy %<>% merge(., CCT_medHist, "patient_ID", all.x = T)
 
 ## ------ Save RDS ------
 
