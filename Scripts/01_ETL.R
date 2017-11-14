@@ -36,76 +36,6 @@ light_box <- catalog[, c("ID", "LightPad_Kit")] %>%
   mutate(MBLT_Group = ifelse(is.na(LightPad_Kit), F, T)) %>%
   select(-LightPad_Kit)
 
-## ------ PTSD Status from PCL-5 ------
-
-survSums <- function(cols) {
-  ifelse(apply(PCL[, cols], 1, FUN = function(x) all(is.na(x))) == TRUE,
-         NA, rowSums(PCL[, cols], na.rm = T))
-}
-
-PCL <- read.csv("Data/Raw/4085_Baseline_PCL.csv") %>% 
-  select(-redcap_event_name, -pcl5_notes, -pcl5_complete) %>%
-  rename(patient_ID = record_id) %>%
-  mutate(pcl_sum = rowSums(.[, grepl("pcl5_[0-9]", colnames(.))]))
-
-pcl_b_cols <- colnames(PCL)[grepl('pcl5_[1-5]{1}', colnames(PCL))]
-pcl_c_cols <- colnames(PCL)[grepl('pcl5_[6-7]{1}', colnames(PCL))]
-pcl_d_cols <- colnames(PCL)[grepl('pcl5_([8-9]{1}|1[0-4]{1})', colnames(PCL))]
-pcl_e_cols <- colnames(PCL)[grepl('pcl5_(1[5-9]|20)', colnames(PCL))]
-
-PCL %<>%
-  mutate(pcl_b_intrusion = survSums(pcl_b_cols),
-         pcl_c_avoidance = survSums(pcl_c_cols),
-         pcl_d_mood_cognition = survSums(pcl_d_cols),
-         pcl_e_arousal_activity = survSums(pcl_e_cols),
-         cluster_ptsd =
-           rowSums(.[, pcl_b_cols] >= 2, na.rm = T) >= 1 &
-           rowSums(.[, pcl_c_cols] >= 2, na.rm = T) >= 1 &
-           rowSums(.[, pcl_d_cols] >= 2, na.rm = T) >= 2 &
-           rowSums(.[, pcl_e_cols] >= 2, na.rm = T) >= 2,
-         Group_PTSD = factor(ifelse(cluster_ptsd == T & pcl_sum >= 33,
-                                    "PTSD", "No_PTSD")))
-
-rm(list = regmatches(ls(), regexpr("pcl_[a-z]_cols", ls())))
-
-## ------ Patient Chronotype from rMEP ------
-
-strip_waketime <- function(x) {
-  wake_time <- strsplit(as.character(x), "-")[[1]][1] %>%
-    # unlist %>%
-    # .[seq(1, length(.) - 1, 2)] %>%
-    strptime(., "%I:%M %p", tz = "America/Los_Angeles") %>%
-    as.character %>%
-    substr(., 12, nchar(.))
-  
-  if (is.na(wake_time)) {
-    return(NA)
-  } else {
-    return(paste0(wake_time, " PST"))
-  }
-}
-
-waketime_plus <- function(x, n) {
-  if (is.na(x)) {
-    return(NA)
-  } else {
-    
-    hours_out <- strsplit(x, ":")[[1]][1] %>%
-      as.numeric %>%
-      add(., n)
-    
-    return(gsub(strsplit(x, ":")[[1]][1], hours_out, x))
-  }
-}
-
-rMEQ <- read.csv("Data/Raw/4085_Baseline_rMEQ.csv") %>%
-  set_colnames(c("patient_ID", "Event_Name", "Wake_Time", "Refreshed",
-                 "Bed_Time", "Best_Time", "Chronotype", "Complete")) %>%
-  mutate(DAR_Wake_Time = mapply(Wake_Time, FUN = strip_waketime),
-         DAR_Bed_Time = mapply(DAR_Wake_Time, FUN = function(i) waketime_plus(i, 12)),
-         DAR_Light_Box_Time = mapply(DAR_Wake_Time, FUN = function(i) waketime_plus(i, 3))) %>%
-  select(patient_ID, DAR_Wake_Time, DAR_Bed_Time, DAR_Light_Box_Time)
-
 ## ------ Major ETL Functions ------
 
 get_actigraphy_headers <- function(path) {
@@ -242,6 +172,76 @@ get_sun_times <- function(lat, long, date, tz = "America/Los_Angeles") {
              Day_Length = as.numeric(sunset$time - sunrise$time))
 }
 
+## ------ PTSD Status from PCL-5 ------
+
+survSums <- function(cols) {
+  ifelse(apply(PCL[, cols], 1, FUN = function(x) all(is.na(x))) == TRUE,
+         NA, rowSums(PCL[, cols], na.rm = T))
+}
+
+PCL <- read.csv("Data/Raw/4085_Baseline_PCL.csv") %>% 
+  select(-redcap_event_name, -pcl5_notes, -pcl5_complete) %>%
+  rename(patient_ID = record_id) %>%
+  mutate(pcl_sum = rowSums(.[, grepl("pcl5_[0-9]", colnames(.))]))
+
+pcl_b_cols <- colnames(PCL)[grepl('pcl5_[1-5]{1}', colnames(PCL))]
+pcl_c_cols <- colnames(PCL)[grepl('pcl5_[6-7]{1}', colnames(PCL))]
+pcl_d_cols <- colnames(PCL)[grepl('pcl5_([8-9]{1}|1[0-4]{1})', colnames(PCL))]
+pcl_e_cols <- colnames(PCL)[grepl('pcl5_(1[5-9]|20)', colnames(PCL))]
+
+PCL %<>%
+  mutate(pcl_b_intrusion = survSums(pcl_b_cols),
+         pcl_c_avoidance = survSums(pcl_c_cols),
+         pcl_d_mood_cognition = survSums(pcl_d_cols),
+         pcl_e_arousal_activity = survSums(pcl_e_cols),
+         cluster_ptsd =
+           rowSums(.[, pcl_b_cols] >= 2, na.rm = T) >= 1 &
+           rowSums(.[, pcl_c_cols] >= 2, na.rm = T) >= 1 &
+           rowSums(.[, pcl_d_cols] >= 2, na.rm = T) >= 2 &
+           rowSums(.[, pcl_e_cols] >= 2, na.rm = T) >= 2,
+         Group_PTSD = factor(ifelse(cluster_ptsd == T & pcl_sum >= 33,
+                                    "PTSD", "No_PTSD")))
+
+rm(list = regmatches(ls(), regexpr("pcl_[a-z]_cols", ls())))
+
+## ------ Patient Chronotype from rMEP ------
+
+strip_waketime <- function(x) {
+  wake_time <- strsplit(as.character(x), "-")[[1]][1] %>%
+    # unlist %>%
+    # .[seq(1, length(.) - 1, 2)] %>%
+    strptime(., "%I:%M %p", tz = "America/Los_Angeles") %>%
+    as.character %>%
+    substr(., 12, nchar(.))
+  
+  if (is.na(wake_time)) {
+    return(NA)
+  } else {
+    return(paste0(wake_time, " PST"))
+  }
+}
+
+waketime_plus <- function(x, n) {
+  if (is.na(x)) {
+    return(NA)
+  } else {
+    
+    hours_out <- strsplit(x, ":")[[1]][1] %>%
+      as.numeric %>%
+      add(., n)
+    
+    return(gsub(strsplit(x, ":")[[1]][1], hours_out, x))
+  }
+}
+
+rMEQ <- read.csv("Data/Raw/4085_Baseline_rMEQ.csv") %>%
+  set_colnames(c("patient_ID", "Event_Name", "Wake_Time", "Refreshed",
+                 "Bed_Time", "Best_Time", "Chronotype", "Complete")) %>%
+  mutate(DAR_Wake_Time = mapply(Wake_Time, FUN = strip_waketime),
+         DAR_Bed_Time = mapply(DAR_Wake_Time, FUN = function(i) waketime_plus(i, 12)),
+         DAR_Light_Box_Time = mapply(DAR_Wake_Time, FUN = function(i) waketime_plus(i, 3))) %>%
+  select(patient_ID, DAR_Wake_Time, DAR_Bed_Time, DAR_Light_Box_Time)
+
 ## ------ Create Data Frames ------
 
 # Append header information onto file list data.frame
@@ -286,7 +286,7 @@ rm(list = c("PCL", "sunsetDF", "light_box"))
 
 ## ------ Filter out Overlapping Dates ------
 
-#' Will be good to put this data.frame into a CSV when we have more CCT
+#' FIXME: Will be good to put this data.frame into a CSV when we have more CCT
 #' patients, but this works fine until January.
 
 overlap_dates <- data.frame(patient_ID = c(10, 11, 13, 14),
@@ -325,7 +325,7 @@ updated_day_date <- xtabs(~ patient_ID + Date, actigraphy) %>%
   filter(Freq > 0) %>%
   arrange(patient_ID, Date) %>%
   mutate(Day = lapply(rle(as.numeric(as.character(.[, "patient_ID"])))$lengths,
-                      function(i) seq(1, i)) %>%
+                      function(i) seq(0, i - 1, 1)) %>%
            do.call('c', .)) %>%
   select(-Freq)
 
@@ -716,7 +716,7 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
     ii %<>% merge(., which_day_date, by = "Noon_Date", all.x = T) %>%
       select(-Noon_Date) %>%
       mutate(Noon_Day = opelr::numfac(Noon_Day),
-             Noon_Day = Noon_Day - (min(Noon_Day, na.rm = T) - 1)) %>%
+             Noon_Day = Noon_Day - (min(Noon_Day, na.rm = T))) %>%
       arrange(DateTime)
 
     return(ii)
@@ -789,9 +789,9 @@ saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_static.rds")
 #' #1/#2 at that point, respectively. 
 
 ### Exclude by any 3+ hour window
-off_wrist <- xtabs(~ patient_ID + No_Activity_Change_Window + Date, data = actigraphy) %>%
+off_wrist <- xtabs(~ patient_ID + No_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
   as.data.frame.table %>%
-  reshape2::dcast(., formula = patient_ID + Date ~ No_Activity_Change_Window,
+  reshape2::dcast(., formula = patient_ID + Noon_Day ~ No_Activity_Change_Window,
                   value.var = "Freq") %>% 
   filter((`FALSE` + `TRUE`) > 0) %>%
   rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
@@ -807,8 +807,8 @@ off_wrist <- xtabs(~ patient_ID + No_Activity_Change_Window + Date, data = actig
 
 ### Merge
 actigraphy <- merge(actigraphy,
-                    off_wrist[,c("patient_ID", "Date", "At_Least_96_Hours_On")],
-                    by = c("patient_ID", "Date")) %>%
+                    off_wrist[,c("patient_ID", "Noon_Day", "At_Least_96_Hours_On")],
+                    by = c("patient_ID", "Noon_Day")) %>%
   dplyr::filter(At_Least_96_Hours_On == T) %>%
   arrange(patient_ID, DateTime)
 
