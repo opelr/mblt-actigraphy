@@ -10,7 +10,7 @@ library(lubridate)
 library(reshape2)
 library(zoo)
 
-actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds") 
+actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds")
 
 results <- list()
 
@@ -377,6 +377,20 @@ results$light_adherence <- calc_light_adherence("Light_15_5k_smooth") %>%
          Light_Adherent_Minutes = Minutes,
          Light_Adherent_ABL = ABL)
 
+## ------ Daytime activity ratio (DAR) ------
+# taken from http://www.neurology.org/content/88/3/268.long
+
+#' DAR == 12-hour period based on individual's self-reported chronotype
+#' DAR_Period == 6:30 AM - 11 PM
+#' DAR_77 == 7AM - 7PM
+#' Additional DAR variables can be added in 01_ETL.R script
+results$DAR <- aggregate(Activity ~ patient_ID + DAR + Noon_Day, actigraphy, mean) %>%
+  reshape2::dcast(., formula = patient_ID + Noon_Day ~ DAR, value.var = "Activity") %>%
+  set_colnames(c("patient_ID", "Noon_Day", "Day", "Night")) %>%
+  mutate(DAR = (Day/(Day + Night))) %>%
+  filter(complete.cases(.)) %>%
+  arrange(patient_ID, Noon_Day)
+
 ## ------ Major Metrics by Patient by Day ------
 
 results$patient_catalog <- xtabs(~ patient_ID + Noon_Day + Group, actigraphy) %>%
@@ -408,6 +422,50 @@ rm(major_results)
 
 ## ----------------------------------------------------------------------------
 
+## ------ First and Last Week Averages (Slopegraphs) ------
+
+FL_results <- results$major_results %>%
+  mutate(Week = floor((Noon_Day - 1)/7) + 1) %>%
+  aggregate(cbind(Activity_IV_expanding_3, Activity_IS_expanding_3,
+                  Activity_IV_moving_3, Activity_IS_moving_3,
+                  Activity_IV_expanding_7, Activity_IS_expanding_7,
+                  Activity_IV_moving_7, Activity_IS_moving_7, RA) ~ patient_ID + Week,
+          ., function(x) mean(x, na.rm = T))
+
+weeks <- aggregate(Week ~ patient_ID, FL_results, max)
+
+# FIXME: Need to fix PTSD, light definitions later
+FL_results_final <-  split(FL_results, FL_results$patient_ID) %>%
+  lapply(., function (ii) {
+    ii %<>%
+      filter(Week %in% c(1, weeks$Week[weeks$patient_ID == unique(.[, "patient_ID"])]))
+  }) %>%
+  do.call("rbind", .) %>%
+  set_rownames(1L:nrow(.)) %>%
+  mutate(Week_Name = factor(ifelse(Week == 1, "First", "Last")),
+         PTSD = ifelse(patient_ID %in% c(3, 8, 9, 10, 11, 13, 15, 16), "PTSD", "No PTSD"),
+         Light = ifelse(as.numeric(as.character(patient_ID)) < 10, "Control", "Light"))
+
+## --- Plot ---
+slopegraph <- function(variable) {
+  p <- ggplot(FL_results_final,
+              aes_string("Week_Name", variable, group = "patient_ID",
+                                           color = "patient_ID")) +
+    geom_point(aes(shape = Light), size = 3) + 
+    geom_line(aes(linetype = Light), size = 1) +
+    facet_grid(PTSD ~ .)
+  
+  plot(p)
+}
+
+slopegraph("Activity_IV_moving_3")
+slopegraph("Activity_IS_moving_3")
+slopegraph("RA")
+
+
+
+anova(lm(Activity_IS_moving_7 ~ PTSD * CCT + Week_Name, FL_results_final))
+
 ## ------ Longitudinal Plots ------
 
 # TODO: Chad, this is the function that generates the plot I sent
@@ -420,6 +478,20 @@ longitudinal_plot <- function(var) {
 }
 
 longitudinal_plot("Activity_IS_moving_3")
+
+pdf("Chad_IV_IS_plots.pdf", width = 15, height = 12)
+
+longitudinal_plot("Activity_IS_moving_3")
+longitudinal_plot("Activity_IS_expanding_3")
+longitudinal_plot("Activity_IS_moving_7")
+longitudinal_plot("Activity_IS_expanding_7")
+longitudinal_plot("Activity_IV_moving_3")
+longitudinal_plot("Activity_IV_expanding_3")
+longitudinal_plot("Activity_IV_moving_7")
+longitudinal_plot("Activity_IV_expanding_7")
+longitudinal_plot("RA")
+
+dev.off()
 
 ## ------ First/Middle/Last ------ 
 
@@ -554,47 +626,6 @@ percent_off_wrist <- aggregate(cbind(Watch_Off, Total_Epochs) ~ patient_ID,
   mutate(Percent_Off = 100 * Watch_Off / Total_Epochs)
 
 results$percent_off_wrist <- percent_off_wrist
-
-## ------ Daytime activity ratio (DAR) ------
-# taken from http://www.neurology.org/content/88/3/268.long
-
-### Daytime is defined as 6:30 AM - 11 PM --> can be modified in 01_ETL.R script
-DAR_parent <- aggregate(Activity ~ patient_ID + DAR_Period + Day, actigraphy, mean) %>%
-  reshape2::dcast(., formula = patient_ID + Day ~ DAR_Period, value.var = "Activity") %>%
-  set_colnames(c("patient_ID", "Day_number", "Day", "Night")) %>%
-  mutate(DAR = 100 * (Day/(Day + Night))) %>%
-  filter(complete.cases(.)) %>%
-  merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
-        by = c("patient_ID", "Day_number"))
-
-DAR <- cbind(aggregate(DAR ~ patient_ID, DAR_parent, mean),
-                   aggregate(DAR ~ patient_ID, DAR_parent, function(X) {
-                     opelr::sem(X, na.rm = T)
-                    })[2]) %>%
-  set_colnames(c("patient_ID", "DAR", "SEM")) %>%
-  mutate(ymax = DAR + SEM,
-         ymin = DAR - SEM)
-
-results$DAR <- DAR
-
-### Daytime is defined as 7:00 AM - 7 PM
-DAR_77_parent <- aggregate(Activity ~ patient_ID + DAR_77 + Day, actigraphy, mean) %>%
-  reshape2::dcast(., formula = patient_ID + Day ~ DAR_77, value.var = "Activity") %>%
-  set_colnames(c("patient_ID", "Day_number", "Day", "Night")) %>%
-  mutate(DAR = 100 * (Day/(Day + Night))) %>%
-  filter(complete.cases(.)) %>%
-  merge(., off_wrist[, c("patient_ID", "Day_number", "Percent_Off", "Total_Epochs")],
-        by = c("patient_ID", "Day_number"))
-
-DAR_77 <- cbind(aggregate(DAR ~ patient_ID, DAR_77_parent, mean),
-                   aggregate(DAR ~ patient_ID, DAR_77_parent, function(X) {
-                     opelr::sem(X, na.rm = T)
-                   })[2]) %>%
-  set_colnames(c("patient_ID", "DAR", "SEM")) %>%
-  mutate(ymax = DAR + SEM,
-         ymin = DAR - SEM)
-
-results$DAR_77 <- DAR_77
 
 ## ------ Nighttime sleep duration ------
 # `Line` is being used as a dummy variable
