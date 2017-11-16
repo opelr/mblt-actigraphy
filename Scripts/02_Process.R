@@ -178,6 +178,8 @@ slopegraph <- function(variable) {
   plot(p)
 }
 
+pdf("Data/Plots/Slopegraphs.pdf", width = 15, height = 12)
+
 slopegraph("Activity_IV_moving_7")
 slopegraph("Activity_IS_moving_7")
 slopegraph("RA")
@@ -185,9 +187,15 @@ slopegraph("DAR")
 slopegraph("SE")
 slopegraph("Sleep_Minutes")
 
+dev.off()
 
 
 anova(lm(Activity_IV_moving_7 ~ PTSD + Light + Week_Name, FL_results_final))
+anova(lm(Activity_IS_moving_7 ~ PTSD + Light + Week_Name, FL_results_final))
+anova(lm(RA ~ PTSD + Light + Week_Name, FL_results_final))
+anova(lm(DAR ~ PTSD + Light + Week_Name, FL_results_final))
+anova(lm(SE ~ PTSD + Light + Week_Name, FL_results_final))
+anova(lm(Sleep_Minutes ~ PTSD + Light + Week_Name, FL_results_final))
 
 ## ------ Longitudinal Plots ------
 
@@ -322,6 +330,59 @@ ggplot(major_results, aes(Noon_Day, Sleep_Minutes, group = patient_ID,
                           color = patient_ID)) +
   geom_point() +
   geom_smooth()
+
+
+## ------ Average Day Activity ------
+
+plot_avg_patient_day <- function(patient, df) {
+  d1 <- dplyr::filter(df, patient_ID == patient) %>%
+    select(., Time, Light, Activity, Day, DateAbbr, Sleep_Acti_Smooth, Sleep_Bouts) %>%
+    mutate(Activity_Scale = Activity * (max(Light, na.rm = T) / max(Activity, na.rm = T)),
+           Log_Light = log10(Light)) %>%
+    aggregate(cbind(Light, Activity, Activity_Scale, Log_Light) ~ Time, ., mean)
+  
+  p <- ggplot(d1, mapping = aes(x = Time)) +
+    geom_line(aes(y = Light), color = "Orange") +
+    geom_line(aes(y = Activity_Scale), color = "Black") +
+    # geom_rect(data=time_bouts, mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2),
+    # color='blue', alpha=0.2) +
+    scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
+    scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity, na.rm = T) / max(d1$Light, na.rm = T)),
+                                           name = "Activity (Black)")) +
+    ylab("Light (Yellow)") + 
+    labs(title = paste0("Subject #", patient))
+  
+  plot(p)
+}
+
+pdf("Data/Plots/Avg_Patient_Day.pdf", width = 11, height = 6)
+for (i in unique(actigraphy$patient_ID)) {
+  plot_avg_patient_day(i, actigraphy)
+}
+dev.off()
+
+## ------ All Patients Avg Activity, Overlayed ------
+
+plot_avg_all_patients  <- function(variable, df) {
+  d1 <- dplyr::filter(df) %>%
+    mutate(Activity_Scale = Activity * (max(Light, na.rm = T) / max(Activity, na.rm = T)),
+           Log_Light = log10(Light),
+           patient_ID = factor(patient_ID)) %>%
+    aggregate(cbind(Light, Activity, Activity_Scale, Log_Light) ~ patient_ID + Time, ., mean)
+  
+  p <- ggplot(d1, aes_string("Time", variable, group = "patient_ID",
+                 color = "patient_ID")) +
+    geom_line() + 
+    scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour")
+  
+  plot(p)
+}
+
+pdf("Data/Plots/Avg_Day_All_Patients.pdf", width = 11, height = 6)
+for (i in c("Activity", "Light")) {
+  plot_avg_all_patients(i, actigraphy)
+}
+dev.off()
 
 ## ----------------------------------------------------------------------------
 
