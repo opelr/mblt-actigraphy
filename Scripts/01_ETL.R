@@ -188,7 +188,12 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
                                                   FUN = "zero_range", "left"),
         No_Activity_Change_Window = na.locf(No_Activity_Change_Window),
         No_Activity_Length = rep(rle(No_Activity_Change_Window)[["lengths"]],
-                                 rle(No_Activity_Change_Window)[["lengths"]])) %>%
+                                 rle(No_Activity_Change_Window)[["lengths"]]),
+        Thresh_Activity_Change_Window = moving_window(., "Activity", 90, 1,
+                                                      FUN = "threshold_range", "left"),
+        Thresh_Activity_Change_Window = na.locf(Thresh_Activity_Change_Window),
+        Thresh_Activity_Length = rep(rle(Thresh_Activity_Change_Window)[["lengths"]],
+                                 rle(Thresh_Activity_Change_Window)[["lengths"]])) %>%
       mutate(Lotjonen_nat = moving_window(., "Lotjonen_Counts", 23, 1,
                                           FUN = "sum", "center"),
              Off_Wrist = off_wrist_detector(., 1),
@@ -297,9 +302,9 @@ saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_static.rds")
 #' #1/#2 at that point, respectively. 
 
 ### Exclude by any 3+ hour window
-off_wrist <- xtabs(~ patient_ID + No_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
+off_wrist <- xtabs(~ patient_ID + Thresh_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
   as.data.frame.table %>%
-  reshape2::dcast(., formula = patient_ID + Noon_Day ~ No_Activity_Change_Window,
+  reshape2::dcast(., formula = patient_ID + Noon_Day ~ Thresh_Activity_Change_Window,
                   value.var = "Freq") %>% 
   filter((`FALSE` + `TRUE`) > 0) %>%
   rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
