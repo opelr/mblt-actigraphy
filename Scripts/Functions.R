@@ -180,6 +180,16 @@ waketime_plus <- function(x, n) {
   }
 }
 
+## ------ DAR Calculation ------
+
+DAR_ifelse <- function(df, morning, evening, true_label, false_label) {
+  
+  factor(ifelse((is.na(df[, morning]) | is.na(df[, evening])), NA, 
+                ifelse(df[, "DateTime"] >= as.POSIXct(paste(df[, "Date"], df[, morning])) &
+                         df[, "DateTime"] <= as.POSIXct(paste(df[, "Date"], df[, evening])),
+                       true_label, false_label)))
+}
+
 ## ------ Sleep Staging Functions ------
 
 actiware_sleep <- function(df, column = "Activity", threshold) {
@@ -287,6 +297,22 @@ zero_range <- function(x, tol = .Machine$double.eps ^ 0.5) {
   x <- round(x)
   x <- range(x, na.rm = T) / mean(x, na.rm = T)
   isTRUE(all.equal(x[1], x[2], tolerance = tol))
+}
+
+threshold_range <- function(x, thresh = 7) {
+  #' Test for sub-threshold variance in a vector
+  #' 
+  #' Args:
+  #'   x (int): Vector of numbers
+  #'   thresh (int): Maximum difference between the extremes of 'x'
+  #' 
+  #' Returns:
+  #'   Boolean value
+  
+  if (length(x) == 1)
+    return(TRUE)
+  
+  (max(x, na.rm = T) - min(x, na.rm = T)) <= thresh
 }
 
 off_wrist_detector <- function(dataframe, threshold) {
@@ -593,16 +619,16 @@ calculate_IV <- function(var, patient, window, size, dat_frm) {
                 denominator[, c("patient_ID", "Denominator")],
                 by = "patient_ID") %>%
       mutate(IV = Numerator / Denominator,
-             Day = pat_unique_days[ii]) %>%
-      select(patient_ID, Day, IV)
+             Noon_Day = pat_unique_days[ii]) %>%
+      select(patient_ID, Noon_Day, IV)
   }) %>%
     do.call("rbind", .)
   
   
   IV_blank <- data.frame(patient_ID = patient,
-                         Day = pat_seq_days)
+                         Noon_Day = pat_seq_days)
   
-  IV %<>% merge(IV_blank, ., by = c("patient_ID", "Day"), all.x = T)
+  IV %<>% merge(IV_blank, ., by = c("patient_ID", "Noon_Day"), all.x = T)
   
   return(IV)
 }
@@ -681,19 +707,18 @@ calculate_IS <- function(var, patient, window, size, dat_frm) {
                 denominator[, c("patient_ID", "Denominator")],
                 by = "patient_ID") %>%
       mutate(IS = Numerator / Denominator,
-             Day = pat_unique_days[ii]) %>%
-      select(patient_ID, Day, IS)
+             Noon_Day = pat_unique_days[ii]) %>%
+      select(patient_ID, Noon_Day, IS)
   }) %>%
     do.call("rbind", .)
   
   IS_blank <- data.frame(patient_ID = patient,
-                         Day = pat_seq_days)
+                         Noon_Day = pat_seq_days)
   
-  IS %<>% merge(IS_blank, ., by = c("patient_ID", "Day"), all.x = T)
+  IS %<>% merge(IS_blank, ., by = c("patient_ID", "Noon_Day"), all.x = T)
   
   return(IS)
 }
-
 
 ## ------ Relative Amplitude (RA), M10, and L5 ------
 
@@ -808,6 +833,31 @@ calc_light_adherence <- function(column) {
   return(light_adherence)
 }
 
+## ------ Max/Min Week by Light ------
+
+light_week <- function(pat_ID, len, fn = 'max') {
+  df <- filter(results$major_results, patient_ID == pat_ID)
+  days <- df$Noon_Day[1:(length(df$Noon_Day) - (len - 1))]
+  
+  light_days <- lapply(days, function (i) {
+    out <- aggregate(Light ~ patient_ID,
+                     dplyr::filter(df, Noon_Day >= i, Noon_Day <= i + (len - 1)),
+                     sum) %>%
+      rename(Light_Sum = Light) %>%
+      mutate(Day_Range = paste0(i, "-", i + (len - 1)),
+             Light_Mean = Light_Sum / len)
+  }) %>%
+    do.call("rbind", .)
+  
+  if (fn == 'max') {
+    day_range <- light_days$Day_Range[which.max(light_days$Light_Sum)]
+  } else if (fn == 'min') {
+    day_range <- light_days$Day_Range[which.min(light_days$Light_Sum)]
+  }
+  
+  return(data.frame(patient_ID = pat_ID, Days = day_range))
+}
+
 # ------------------------ Visualize ------------------------ 
 
 ## ------ Entire Actogram ------
@@ -846,10 +896,76 @@ plot_patient <- function(patient, df) {
   plot(p)
 }
 
+## ------ Average Day Activity ------
+
+plot_avg_patient_day <- function(patient, df) {
+  d1 <- dplyr::filter(df, patient_ID == patient) %>%
+    select(., Time, Light, Activity, Day, DateAbbr, Sleep_Acti_Smooth, Sleep_Bouts) %>%
+    mutate(Activity_Scale = Activity * (max(Light, na.rm = T) / max(Activity, na.rm = T)),
+           Log_Light = log10(Light)) %>%
+    aggregate(cbind(Light, Activity, Activity_Scale, Log_Light) ~ Time, ., mean)
+  
+  p <- ggplot(d1, mapping = aes(x = Time)) +
+    geom_line(aes(y = Light), color = "Orange") +
+    geom_line(aes(y = Activity_Scale), color = "Black") +
+    # geom_rect(data=time_bouts, mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2),
+    # color='blue', alpha=0.2) +
+    scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
+    scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity, na.rm = T) / max(d1$Light, na.rm = T)),
+                                           name = "Activity (Black)")) +
+    ylab("Light (Yellow)") + 
+    labs(title = paste0("Subject #", patient))
+  
+  plot(p)
+}
+
+## ------ All Patients Avg Activity, Overlayed ------
+
+plot_avg_all_patients  <- function(variable, df) {
+  d1 <- dplyr::filter(df) %>%
+    mutate(Activity_Scale = Activity * (max(Light, na.rm = T) / max(Activity, na.rm = T)),
+           Log_Light = log10(Light),
+           patient_ID = factor(patient_ID)) %>%
+    aggregate(cbind(Light, Activity, Activity_Scale, Log_Light) ~ patient_ID + Time, ., mean)
+  
+  p <- ggplot(d1, aes_string("Time", variable, group = "patient_ID",
+                             color = "patient_ID")) +
+    geom_line() + 
+    scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour")
+  
+  plot(p)
+}
+
 ## ------ Slopegraphs ------
+
+slopegraph <- function(variable, dat_frm) {
+  p <- ggplot(dat_frm,
+              aes_string("Week_Name", variable, group = "patient_ID",
+                         color = "patient_ID")) +
+    geom_point(aes(shape = Light), size = 3) + 
+    geom_line(aes(linetype = Light), size = 1) +
+    facet_grid(PTSD ~ .)
+  
+  plot(p)
+}
 
 ## ------ Longitudinal Plots ------
 
-
+longitudinal_plot <- function(var) {
+  ggplot(results$major_results, aes_string("Noon_Day", var, colour="patient_ID")) +
+    geom_point(aes(shape = MBLT_Group), size = 2) +
+    geom_smooth(aes(linetype = MBLT_Group)) +
+    facet_grid(Group_PTSD ~ .)
+}
 
 # ------------------------ Model/Analyze ------------------------ 
+
+# ------------------------ Helper/Auxiliary Functions ------------------------
+
+## ------ Find Closest ------
+find_closest <- function(x, num) {
+  #' Find "Price is Right" style number
+  x_sort <- x[order(x)]
+  i <- findInterval(num, x_sort)
+  return(x_sort[i])
+}
