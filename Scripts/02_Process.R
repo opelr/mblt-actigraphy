@@ -1,7 +1,7 @@
 ## Script: Analysis of Actiwatch Data
 ## Project: mblt-actigraphy
 ## Author: Ryan Opel -- @opelr
-## Date: 2017-11-115
+## Date: 2017-11-15
 ## Version: 0.3.0
 
 library(magrittr)
@@ -42,8 +42,8 @@ results$sleep_metrics <- xtabs(~ patient_ID + Sleep_Bouts + Sleep_Acti_Smooth + 
 #   
 # }
 
-IV_IS_combs <- expand.grid(c("Activity", "Light"), c("moving", "expanding"),
-                           c(3, 7)) %>% 
+IV_IS_combs <- expand.grid(c("Activity", "Light"), #, "Sleep_Thresh_Smooth_Int"
+                           c("moving", "expanding"), c(3, 7)) %>% 
   rename(var = Var1, window = Var2, size = Var3) %>%
   arrange(var, window, size)
 
@@ -103,6 +103,7 @@ results$light_adherence <- calc_light_adherence("Light_15_5k_smooth") %>%
 #' DAR_Period == 6:30 AM - 11 PM
 #' DAR_77 == 7AM - 7PM
 #' Additional DAR variables can be added in 01_ETL.R script
+
 results$DAR <- aggregate(Activity ~ patient_ID + DAR + Noon_Day, actigraphy, mean) %>%
   reshape2::dcast(., formula = patient_ID + Noon_Day ~ DAR, value.var = "Activity") %>%
   set_colnames(c("patient_ID", "Noon_Day", "Day", "Night")) %>%
@@ -110,16 +111,30 @@ results$DAR <- aggregate(Activity ~ patient_ID + DAR + Noon_Day, actigraphy, mea
   filter(complete.cases(.)) %>%
   arrange(patient_ID, Noon_Day)
 
+## ------ Total Activity and Light Exposure ------
+
+results$total_activity_light <- aggregate(cbind(Activity, Light) ~ patient_ID + Noon_Day,
+                                  actigraphy, sum)
+
+## ------ Average Light Exposure By Bins ------
+
+# actigraphy$
+
 ## ------ Major Metrics by Patient by Day ------
 
-results$patient_catalog <- xtabs(~ patient_ID + Noon_Day + Group, actigraphy) %>%
+results$patient_catalog <- xtabs(~ patient_ID + Noon_Day + Group + Date + watch_ID, actigraphy) %>%
   as.data.frame %>%
   filter(Freq > 0) %>%
   mutate(Group = factor(Group, levels = c("C", "CCT"),
                         labels = c("Ctrl", "CCT"))) %>%
-  select(-Freq)
+  select(-Freq) %>%
+  arrange(patient_ID, Noon_Day) %>%
+  split(., .[, "watch_ID"]) %>%
+  lapply(., function(i) i[seq(1, nrow(i), 2), ]) %>%
+  do.call("rbind", .) %>%
+  arrange(patient_ID, Noon_Day)
 
-major_results <-results$sleep_metrics %>%
+major_results <- results$sleep_metrics %>%
           select(-Sleep_Bouts, -Sleep, -Wake) 
 
 for (i in 2:length(results)) {
@@ -136,12 +151,17 @@ major_results %<>% arrange(patient_ID, Noon_Day) %>%
           select(-Freq),
         by = "patient_ID")
 
-results$major_results <- major_results
+results$major_results <- major_results %>%
+  arrange(patient_ID)
 rm(major_results)
+
+## ------ Save RDS ------
+
+saveRDS(results, ".\\Rmd\\Data\\results.rds")
 
 ## ----------------------------------------------------------------------------
 
-## ------ First and Last Week Averages (Slopegraphs) ------
+## ------ Slopegraphs: First and Last Week Averages ------
 
 FL_results <- results$major_results %>%
   mutate(Week = floor((Noon_Day - 1)/7) + 1) %>%
@@ -150,12 +170,13 @@ FL_results <- results$major_results %>%
                   Activity_IV_expanding_7, Activity_IS_expanding_7,
                   Activity_IV_moving_7, Activity_IS_moving_7, RA, DAR,
                   Sleep_Minutes, WASO_Minutes, SE) ~ patient_ID + Week,
-          ., mean, na.rm = T, na.action = NULL)
+            ., mean, na.rm = T, na.action = NULL)
 
+## Determine Week numbers
 weeks <- aggregate(Week ~ patient_ID, FL_results, max)
 
 # FIXME: Need to fix PTSD, light definitions later
-FL_results_final <-  split(FL_results, FL_results$patient_ID) %>%
+FL_results_FL <-  split(FL_results, FL_results$patient_ID) %>%
   lapply(., function (ii) {
     ii %<>%
       filter(Week %in% c(1, weeks$Week[weeks$patient_ID == unique(.[, "patient_ID"])]))
@@ -166,225 +187,202 @@ FL_results_final <-  split(FL_results, FL_results$patient_ID) %>%
          PTSD = ifelse(patient_ID %in% c(3, 8, 9, 10, 11, 13, 15, 16), "PTSD", "No PTSD"),
          Light = ifelse(as.numeric(as.character(patient_ID)) < 10, "Control", "Light"))
 
-## --- Plot ---
-slopegraph <- function(variable) {
-  p <- ggplot(FL_results_final,
-              aes_string("Week_Name", variable, group = "patient_ID",
-                                           color = "patient_ID")) +
-    geom_point(aes(shape = Light), size = 3) + 
-    geom_line(aes(linetype = Light), size = 1) +
-    facet_grid(PTSD ~ .)
-  
-  plot(p)
-}
 
-pdf("Data/Plots/Slopegraphs.pdf", width = 15, height = 12)
+## First and Second Weeks
+FL_results_F2L2 <-  split(FL_results, FL_results$patient_ID) %>%
+  lapply(., function (ii) {
+    ii %<>%
+      filter(Week %in% c(1, 2, weeks$Week[weeks$patient_ID == unique(.[, "patient_ID"])],
+                         weeks$Week[weeks$patient_ID == unique(.[, "patient_ID"])] - 1))
+  }) %>%
+  do.call("rbind", .) %>%
+  set_rownames(1L:nrow(.)) %>%
+  mutate(Week_Name = factor(ifelse(Week %in% c(1, 2), "First", "Last"))) %>%
+  select(-Week) %>%
+  aggregate(. ~ patient_ID + Week_Name, ., mean) %>%
+  mutate(PTSD = ifelse(patient_ID %in% c(3, 8, 9, 10, 11, 13, 15, 16), "PTSD", "No PTSD"),
+         Light = ifelse(as.numeric(as.character(patient_ID)) < 10, "Control", "Light")) %>%
+  arrange(patient_ID, Week_Name)
 
-slopegraph("Activity_IV_moving_7")
-slopegraph("Activity_IS_moving_7")
-slopegraph("RA")
-slopegraph("DAR")
-slopegraph("SE")
-slopegraph("Sleep_Minutes")
+write.csv(FL_results_F2L2, "First2_Last2_Weeks.csv")
 
-dev.off()
+## Most Light Exposure
+max_light_days_7 <- lapply(unique(actigraphy$patient_ID), function(ii) {
+  light_week(ii, 7, fn = 'max')
+}) %>%
+  do.call("rbind", .) %>%
+  rename(Max_Days = Days)
 
+min_light_days_7 <- lapply(unique(actigraphy$patient_ID), function(ii) {
+  light_week(ii, 7, fn = 'min')
+}) %>%
+  do.call("rbind", .) %>%
+  rename(Min_Days  = Days)
 
-anova(lm(Activity_IV_moving_7 ~ PTSD + Light + Week_Name, FL_results_final))
-anova(lm(Activity_IS_moving_7 ~ PTSD + Light + Week_Name, FL_results_final))
-anova(lm(RA ~ PTSD + Light + Week_Name, FL_results_final))
-anova(lm(DAR ~ PTSD + Light + Week_Name, FL_results_final))
-anova(lm(SE ~ PTSD + Light + Week_Name, FL_results_final))
-anova(lm(Sleep_Minutes ~ PTSD + Light + Week_Name, FL_results_final))
+max_light_days_14 <- lapply(unique(actigraphy$patient_ID), function(ii) {
+  light_week(ii, 14, fn = 'max')
+}) %>%
+  do.call("rbind", .) %>%
+  rename(Max_Days = Days)
 
-## ------ Longitudinal Plots ------
+min_light_days_14 <- lapply(unique(actigraphy$patient_ID), function(ii) {
+  light_week(ii, 14, fn = 'min')
+}) %>%
+  do.call("rbind", .) %>%
+  rename(Min_Days  = Days)
 
-# TODO: Chad, this is the function that generates the plot I sent
+light_days_7 <- merge(max_light_days_7, min_light_days_7, by = 'patient_ID')
+light_days_14 <- merge(max_light_days_14, min_light_days_14, by = 'patient_ID')
 
-longitudinal_plot <- function(var) {
-  ggplot(results$major_results, aes_string("Noon_Day", var, colour="patient_ID")) +
-    geom_point(aes(shape = MBLT_Group), size = 2) +
-    geom_smooth(aes(linetype = MBLT_Group)) +
-    facet_grid(Group_PTSD ~ .)
-}
+FL_results_light_days_7 <- split(results$major_results, results$major_results$patient_ID) %>%
+  lapply(., function(ii) {
+    pat_ID <- unique(ii$patient_ID)
+    max_day_start <- gsub("-(.*)", "", light_days_7$Max_Days[light_days_7$patient_ID == pat_ID]) %>% as.numeric
+    max_day_end <- gsub("(.*)-", "", light_days_7$Max_Days[light_days_7$patient_ID == pat_ID]) %>% as.numeric
+    min_day_start <- gsub("-(.*)", "", light_days_7$Min_Days[light_days_7$patient_ID == pat_ID]) %>% as.numeric
+    min_day_end <- gsub("(.*)-", "", light_days_7$Min_Days[light_days_7$patient_ID == pat_ID]) %>% as.numeric
+    
+    ii %<>%
+      filter(Noon_Day %in% c(seq(max_day_start, max_day_end), seq(min_day_start, min_day_end))) %>%
+      mutate(Min_Max_Light_7 = ifelse(Noon_Day %in% seq(min_day_start, min_day_end), "Min", "Max"))
+  }) %>% do.call("rbind", .) %>%
+  set_rownames(1L:nrow(.)) %>%
+  aggregate(cbind(Activity_IV_expanding_3, Activity_IS_expanding_3,
+                  Activity_IV_moving_3, Activity_IS_moving_3,
+                  Activity_IV_expanding_7, Activity_IS_expanding_7,
+                  Activity_IV_moving_7, Activity_IS_moving_7, RA, DAR,
+                  Sleep_Minutes, WASO_Minutes, SE) ~ patient_ID + Group_PTSD + MBLT_Group + Min_Max_Light_7,
+            ., mean) %>%
+  arrange(patient_ID, Min_Max_Light_7)
 
-longitudinal_plot("Activity_IS_moving_3")
+FL_results_light_days_14 <- split(results$major_results, results$major_results$patient_ID) %>%
+  lapply(., function(ii) {
+    pat_ID <- unique(ii$patient_ID)
+    max_day_start <- gsub("-(.*)", "", light_days_14$Max_Days[light_days_14$patient_ID == pat_ID]) %>% as.numeric
+    max_day_end <- gsub("(.*)-", "", light_days_14$Max_Days[light_days_14$patient_ID == pat_ID]) %>% as.numeric
+    min_day_start <- gsub("-(.*)", "", light_days_14$Min_Days[light_days_14$patient_ID == pat_ID]) %>% as.numeric
+    min_day_end <- gsub("(.*)-", "", light_days_14$Min_Days[light_days_14$patient_ID == pat_ID]) %>% as.numeric
+    
+    ii %<>%
+      filter(Noon_Day %in% c(seq(max_day_start, max_day_end), seq(min_day_start, min_day_end))) %>%
+      mutate(Min_Max_Light_14 = ifelse(Noon_Day %in% seq(min_day_start, min_day_end), "Min", "Max"))
+  }) %>% do.call("rbind", .) %>%
+  set_rownames(1L:nrow(.)) %>%
+  aggregate(cbind(Activity_IV_expanding_3, Activity_IS_expanding_3,
+                  Activity_IV_moving_3, Activity_IS_moving_3,
+                  Activity_IV_expanding_7, Activity_IS_expanding_7,
+                  Activity_IV_moving_7, Activity_IS_moving_7, RA, DAR,
+                  Sleep_Minutes, WASO_Minutes, SE) ~ patient_ID + Group_PTSD + MBLT_Group + Min_Max_Light_14,
+            ., mean) %>%
+  arrange(patient_ID, Min_Max_Light_14)
 
-pdf("Chad_IV_IS_plots.pdf", width = 15, height = 12)
+write.csv(FL_results_light_days_7, "Min_Max_Light_7.csv")
+write.csv(FL_results_light_days_14, "Min_Max_Light_14.csv")
 
-longitudinal_plot("Activity_IS_moving_3")
-longitudinal_plot("Activity_IS_expanding_3")
-longitudinal_plot("Activity_IS_moving_7")
-longitudinal_plot("Activity_IS_expanding_7")
-longitudinal_plot("Activity_IV_moving_3")
-longitudinal_plot("Activity_IV_expanding_3")
-longitudinal_plot("Activity_IV_moving_7")
-longitudinal_plot("Activity_IV_expanding_7")
-longitudinal_plot("RA")
+## ---
 
-dev.off()
+results$FL_results_final <- FL_results_final
+
+FL_dt <- data.table::as.data.table(FL_results_final)
+
+data.table::dcast(FL_dt, formula = patient_ID + Week + PTSD + Light ~ .)
+
+# anova(lm())
 
 ## ------ First/Middle/Last ------ 
 
-# Creation
-
-find_closest <- function(x, num) {
-  #' Find "Price is Right" style number
-  x_sort <- x[order(x)]
-  i <- findInterval(num, x_sort)
-  return(x_sort[i])
-}
-
-## Helper dataframe
-results$FML_days <- merge(aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) min(x) + 2) %>%
-        rename(Min_Day = Noon_Day),
-        aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) find_closest(x, 7)) %>% 
-          rename(Middle_Day = Noon_Day),
-      by = "patient_ID") %>%
-  merge(., aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) find_closest(x, 28) - 1) %>% 
-          rename(Max_Day = Noon_Day),
-        by = "patient_ID") %>%
-  arrange(patient_ID)
-
-## FML DF
-results$FML <- split(results$major_results, results$major_results$patient_ID) %>%
-  lapply(., function(ii) {
-    ID <- unique(ii$patient_ID)
-    dayz <- unlist(results$FML_days[results$FML_days$patient_ID == ID, ][-1])
-    ii <- ii[ii$Noon_Day %in% dayz, ]
-    ii$Time_Point <- c("Initial", "Base_End", "Final")
-    return(ii)
-}) %>%
-  do.call("rbind", .) %>%
-  set_rownames(1:nrow(.)) %>%
-  filter(., Time_Point != "Base_End")
-
-#  Analysis
-
-FML_vars <- c("Sleep_Minutes", "WASO_Minutes", "SE", "Activity_IS",
-              "Activity_IV", "Light_IS", "Light_IV", "RA")
-
-lapply(FML_vars, function(j) {
-  form <- as.formula(paste(j, "~ Group * Time_Point"))
-  ANOV <- anova(lm(form, results$FML))
-  
-  sf <- function(num) {
-    signif(num, 3)
-  }
-  
-  data.frame(IV = j,
-             Group_F = sf(ANOV$`F value`[1]),
-             Group_p = sf(ANOV$`Pr(>F)`[1]),
-             Time_F = sf(ANOV$`F value`[2]),
-             Time_p = sf(ANOV$`Pr(>F)`[2]),
-             Int_F = sf(ANOV$`F value`[3]),
-             Int_p = sf(ANOV$`Pr(>F)`[3]))
-  
-}) %>%
-  do.call("rbind", .)
-
-# Group Plot
-
-Group_FML_plot <- function(var) {
-  i_1 <- select(results$FML, one_of(var), Group, Time_Point)
-  
-  i_2 <- merge(aggregate(. ~ Group + Time_Point, i_1, mean),
-               aggregate(. ~ Group + Time_Point, i_1, sciplot::se) %>%
-                 set_colnames(c("Group", "Time_Point", "SEM")),
-               by = c("Group", "Time_Point")) %>%
-    mutate(ymax = .[, var] + SEM,
-           ymin = .[, var] - SEM,
-           Time_Point = factor(Time_Point, levels = c("Initial", "Base_End", "Final")))
-  
-  p <- ggplot(i_2, aes_string("Group", var, fill = "Time_Point")) +
-    geom_bar(position = "dodge", stat = "identity", colour='black') + 
-    geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2, position=position_dodge(.9))
-  
-  plot(p)
-}
-
-Group_FML_plotFML_plot(FML_vars[1])
-
-# Individual Plot
-
-Indiv_FML_plot <- function(var) {
-  i_1 <- select(results$major_results, patient_ID, one_of(var), Group, Noon_Day) %>%
-    filter(Group == "CCT")
-  
-  p <- ggplot(i_1, aes_string("Noon_Day", var, group = "patient_ID")) +
-    geom_point(aes(color = Group), size = 3) + 
-    geom_line(aes(color = Group), size = 1)
-    
-  
-  plot(p)
-}
-
-Indiv_FML_plot(FML_vars[1])
-
-## ------ Time Series Analysis ------
-
-anova(lm(Sleep_Minutes ~ Group * Noon_Day, major_results))
+# # Creation
+# 
+# 
+# 
+# ## Helper dataframe
+# results$FML_days <- merge(aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) min(x) + 2) %>%
+#         rename(Min_Day = Noon_Day),
+#         aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) find_closest(x, 7)) %>% 
+#           rename(Middle_Day = Noon_Day),
+#       by = "patient_ID") %>%
+#   merge(., aggregate(Noon_Day ~ patient_ID, results$major_results, function(x) find_closest(x, 28) - 1) %>% 
+#           rename(Max_Day = Noon_Day),
+#         by = "patient_ID") %>%
+#   arrange(patient_ID)
+# 
+# ## FML DF
+# results$FML <- split(results$major_results, results$major_results$patient_ID) %>%
+#   lapply(., function(ii) {
+#     ID <- unique(ii$patient_ID)
+#     dayz <- unlist(results$FML_days[results$FML_days$patient_ID == ID, ][-1])
+#     ii <- ii[ii$Noon_Day %in% dayz, ]
+#     ii$Time_Point <- c("Initial", "Base_End", "Final")
+#     return(ii)
+# }) %>%
+#   do.call("rbind", .) %>%
+#   set_rownames(1:nrow(.)) %>%
+#   filter(., Time_Point != "Base_End")
+# 
+# #  Analysis
+# 
+# FML_vars <- c("Sleep_Minutes", "WASO_Minutes", "SE", "Activity_IS",
+#               "Activity_IV", "Light_IS", "Light_IV", "RA")
+# 
+# lapply(FML_vars, function(j) {
+#   form <- as.formula(paste(j, "~ Group * Time_Point"))
+#   ANOV <- anova(lm(form, results$FML))
+#   
+#   sf <- function(num) {
+#     signif(num, 3)
+#   }
+#   
+#   data.frame(IV = j,
+#              Group_F = sf(ANOV$`F value`[1]),
+#              Group_p = sf(ANOV$`Pr(>F)`[1]),
+#              Time_F = sf(ANOV$`F value`[2]),
+#              Time_p = sf(ANOV$`Pr(>F)`[2]),
+#              Int_F = sf(ANOV$`F value`[3]),
+#              Int_p = sf(ANOV$`Pr(>F)`[3]))
+#   
+# }) %>%
+#   do.call("rbind", .)
+# 
+# # Group Plot
+# 
+# Group_FML_plot <- function(var) {
+#   i_1 <- select(results$FML, one_of(var), Group, Time_Point)
+#   
+#   i_2 <- merge(aggregate(. ~ Group + Time_Point, i_1, mean),
+#                aggregate(. ~ Group + Time_Point, i_1, sciplot::se) %>%
+#                  set_colnames(c("Group", "Time_Point", "SEM")),
+#                by = c("Group", "Time_Point")) %>%
+#     mutate(ymax = .[, var] + SEM,
+#            ymin = .[, var] - SEM,
+#            Time_Point = factor(Time_Point, levels = c("Initial", "Base_End", "Final")))
+#   
+#   p <- ggplot(i_2, aes_string("Group", var, fill = "Time_Point")) +
+#     geom_bar(position = "dodge", stat = "identity", colour='black') + 
+#     geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2, position=position_dodge(.9))
+#   
+#   plot(p)
+# }
+# 
+# Group_FML_plotFML_plot(FML_vars[1])
+# 
+# # Individual Plot
+# 
+# Indiv_FML_plot <- function(var) {
+#   i_1 <- select(results$major_results, patient_ID, one_of(var), Group, Noon_Day) %>%
+#     filter(Group == "CCT")
+#   
+#   p <- ggplot(i_1, aes_string("Noon_Day", var, group = "patient_ID")) +
+#     geom_point(aes(color = Group), size = 3) + 
+#     geom_line(aes(color = Group), size = 1)
+#     
+#   
+#   plot(p)
+# }
+# 
+# Indiv_FML_plot(FML_vars[1])
 
 
-ggplot(major_results, aes(Noon_Day, Sleep_Minutes, group = patient_ID,
-                          color = patient_ID)) +
-  geom_point() +
-  geom_smooth()
-
-
-## ------ Average Day Activity ------
-
-plot_avg_patient_day <- function(patient, df) {
-  d1 <- dplyr::filter(df, patient_ID == patient) %>%
-    select(., Time, Light, Activity, Day, DateAbbr, Sleep_Acti_Smooth, Sleep_Bouts) %>%
-    mutate(Activity_Scale = Activity * (max(Light, na.rm = T) / max(Activity, na.rm = T)),
-           Log_Light = log10(Light)) %>%
-    aggregate(cbind(Light, Activity, Activity_Scale, Log_Light) ~ Time, ., mean)
-  
-  p <- ggplot(d1, mapping = aes(x = Time)) +
-    geom_line(aes(y = Light), color = "Orange") +
-    geom_line(aes(y = Activity_Scale), color = "Black") +
-    # geom_rect(data=time_bouts, mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2),
-    # color='blue', alpha=0.2) +
-    scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
-    scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity, na.rm = T) / max(d1$Light, na.rm = T)),
-                                           name = "Activity (Black)")) +
-    ylab("Light (Yellow)") + 
-    labs(title = paste0("Subject #", patient))
-  
-  plot(p)
-}
-
-pdf("Data/Plots/Avg_Patient_Day.pdf", width = 11, height = 6)
-for (i in unique(actigraphy$patient_ID)) {
-  plot_avg_patient_day(i, actigraphy)
-}
-dev.off()
-
-## ------ All Patients Avg Activity, Overlayed ------
-
-plot_avg_all_patients  <- function(variable, df) {
-  d1 <- dplyr::filter(df) %>%
-    mutate(Activity_Scale = Activity * (max(Light, na.rm = T) / max(Activity, na.rm = T)),
-           Log_Light = log10(Light),
-           patient_ID = factor(patient_ID)) %>%
-    aggregate(cbind(Light, Activity, Activity_Scale, Log_Light) ~ patient_ID + Time, ., mean)
-  
-  p <- ggplot(d1, aes_string("Time", variable, group = "patient_ID",
-                 color = "patient_ID")) +
-    geom_line() + 
-    scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour")
-  
-  plot(p)
-}
-
-pdf("Data/Plots/Avg_Day_All_Patients.pdf", width = 11, height = 6)
-for (i in c("Activity", "Light")) {
-  plot_avg_all_patients(i, actigraphy)
-}
-dev.off()
-
-## ----------------------------------------------------------------------------
+## ------------ In Development ------------
 
 ## ------ Median Light Exposure -------
 
@@ -399,17 +397,6 @@ results$median_light_exposure <-
   mutate(ymax = Light + SEM,
          ymin = Light - SEM) %>%
   arrange(patient_ID, Hour)
-
-
-## ------ Percent Time Off-Wrist ------
-
-## TODO: This is no longer accurate, because each "Watch_Off" counts is 3 hours
-
-percent_off_wrist <- aggregate(cbind(Watch_Off, Total_Epochs) ~ patient_ID,
-                               off_wrist[opelr::numfac(off_wrist$Day) <= 28, ], sum) %>%
-  mutate(Percent_Off = 100 * Watch_Off / Total_Epochs)
-
-results$percent_off_wrist <- percent_off_wrist
 
 ## ------ Nighttime sleep duration ------
 # `Line` is being used as a dummy variable
@@ -606,7 +593,3 @@ radial_24 <- dplyr::filter(radial_intermediary, Hour == 0) %>%
 radial <- rbind(radial_intermediary, radial_24)
   
 results$radial_plots <- radial
-
-## ------ Save RDS ------
-
-saveRDS(results, ".\\Rmd\\Data\\results.rds")
