@@ -1,7 +1,7 @@
 ## Script: Import and Shaping of Actiwatch Data
 ## Project: mblt-actigraphy
 ## Author: Ryan Opel -- @opelr
-## Date: 2017-11-115
+## Date: 2017-11-15
 ## Version: 0.3.0
 
 library(magrittr)
@@ -19,11 +19,13 @@ FILE_PATH <- "D:/data/acquired_data/human/h4085/Actigraphy/CSV/"
 FILE_MASK <- "(.*)_New_Analysis.csv"
 
 ## ------ File Repository ------
+#' Build repository of file paths to be read in
 
 acti_files <- data.frame(File = list.files(path = FILE_PATH, pattern = FILE_MASK)) %>%
   mutate(rootpath = normalizePath(paste0(FILE_PATH, File)))
 
 ## ------ Patient Catalog ------
+#' 
 
 catalog <- read.xlsx("Data/Raw/4085_Events_Master_Current.xlsx", 1) %>%
   select(ID, Group, Actiwatch_ID, Second_Actiwatch_ID, LightPad_Kit)
@@ -67,7 +69,7 @@ PCL %<>%
 
 rm(list = regmatches(ls(), regexpr("pcl_[a-z]_cols", ls())))
 
-## ------ Patient Chronotype from rMEP ------
+## ------ Patient Chronotype from rMEQ ------
 
 rMEQ <- read.csv("Data/Raw/4085_Baseline_rMEQ.csv") %>%
   set_colnames(c("patient_ID", "Event_Name", "Wake_Time", "Refreshed",
@@ -97,7 +99,7 @@ sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
 actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   mutate(SunPeriod = factor(ifelse(DateTime > Sunrise & DateTime < Sunset, "Day",
                             "Night"))) %>%
-  dplyr::arrange(., watch_ID, DateTime) %>%
+  dplyr::arrange(watch_ID, DateTime) %>%
   mutate(Activity = opelr::numfac(Activity) + 1,
          Light = opelr::numfac(Light) + 1,
          DAR_77 = factor(ifelse(DateTime <= paste(Date, "07:00:00 PDT") |
@@ -110,12 +112,16 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   merge(., light_box, by = "patient_ID") %>%
   merge(., PCL[, c("patient_ID", "Group_PTSD")], by = "patient_ID") %>%
   merge(., rMEQ, by = "patient_ID") %>%
-  mutate(DAR = factor(ifelse(DateTime <= paste(Date, DAR_Wake_Time) |
-                               DateTime >= paste(Date, DAR_Bed_Time),
-                             "Night", "Day")),
-         Light_Box_Period = factor(ifelse(DateTime <= paste(Date, DAR_Wake_Time) |
-                               DateTime >= paste(Date, DAR_Light_Box_Time),
-                             "Non_Light", "Light")))
+  arrange(patient_ID, DateTime) %>%
+  filter(!patient_ID %in% c("15")) %>%
+  mutate(DAR = DAR_ifelse(., "DAR_Wake_Time", "DAR_Bed_Time", "Day", "Night"),
+         Light_Box_Period = DAR_ifelse(., "DAR_Wake_Time", "DAR_Light_Box_Time", "Light", "Non_Light"),
+         ZT_6 = cut(Time, seq(strptime("00:00", "%R"), by = "6 hours", length.out = 5),
+                    labels = c("12AM-6AM", "6AM-12PM", "12PM-6PM", "6PM-12AM")),
+         ZT_12 = cut(Time, seq(strptime("06:00", "%R"), by = "12 hours", length.out = 3),
+                    labels = c("6AM-6PM", "6PM-6AM")),
+         ZT_12 = factor(ifelse(is.na(ZT_12), "6PM-6AM", as.character(ZT_12)),
+                        levels = c("6AM-6PM", "6PM-6AM")))
 
 rm(list = c("PCL", "sunsetDF", "light_box"))
 
@@ -167,6 +173,9 @@ updated_day_date <- xtabs(~ patient_ID + Date, actigraphy) %>%
 actigraphy %<>%
   select(-Day) %>%
   merge(., updated_day_date, by = c("patient_ID", "Date"))
+
+updated_day_date %<>%
+  mutate(DT = as.POSIXct(strptime(paste(Date, "12:00:00"), "%F %T")))
 
 rm(updated_day_date)
 
