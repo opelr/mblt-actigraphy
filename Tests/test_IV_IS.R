@@ -29,7 +29,13 @@ fake_actig <- data.frame(patient_ID = rep(1:3, each = 14*720),
          Sine_Fuzz_p1_Phase_p875 = Sine_Phase_p875 + rnorm(Epoch, 0, 0.1),
          Sine_Fuzz_p5_Phase_p875 = Sine_Phase_p875 + rnorm(Epoch, 0, 0.5),
          Sine_Fuzz_p1_Phase_p875_Zero = pmax(Sine_Fuzz_p1_Phase_p875, 0),
-         Sine_Fuzz_p5_Phase_p875_Zero = pmax(Sine_Fuzz_p5_Phase_p875, 0))
+         Sine_Fuzz_p5_Phase_p875_Zero = pmax(Sine_Fuzz_p5_Phase_p875, 0),
+         Square_Wave = sign(Sine_Normal),
+         Square_Fuzz_p1 = Square_Wave + rnorm(Epoch, 0, 0.1),
+         Square_Fuzz_p5 = Square_Wave + rnorm(Epoch, 0, 0.5),
+         Square_Phase_p875 = sign(sin(Epoch / round(720 / (1.75 * pi)))),
+         Sqaure_Fuzz_p1_Phase_p875 = Square_Phase_p875 + rnorm(Epoch, 0, 0.1),
+         Sqaure_Fuzz_p5_Phase_p875 = Square_Phase_p875 + rnorm(Epoch, 0, 0.5))
 
 ## ------ Combintations ------
 
@@ -38,7 +44,10 @@ IV_IS_combs <- expand.grid(c("Sine_Normal", "Sign_Sine_Normal", "Gaussian_Noise"
                              "Sine_Fuzz_p1_Zero", "Sine_Fuzz_p5_Zero",
                              "Sine_Phase_p875", "Sine_Phase_p750",
                              "Sine_Fuzz_p1_Phase_p875", "Sine_Fuzz_p5_Phase_p875",
-                             "Sine_Fuzz_p1_Phase_p875_Zero", "Sine_Fuzz_p5_Phase_p875_Zero"),
+                             "Sine_Fuzz_p1_Phase_p875_Zero", "Sine_Fuzz_p5_Phase_p875_Zero",
+                             "Square_Wave", "Square_Fuzz_p1", "Square_Fuzz_p5",
+                             "Square_Phase_p875", "Sqaure_Fuzz_p1_Phase_p875",
+                             "Sqaure_Fuzz_p5_Phase_p875"),
                            c("moving", "expanding"),
                            c(3, 7)) %>% 
   rename(var = Var1, window = Var2, size = Var3) %>%
@@ -152,7 +161,44 @@ with(filter(fake_actig, patient_ID == 1, Noon_Day %in% 1:3),
 text(600, 1.5, "IV = 0.90\nIS = 0.35", adj = 0)
 abline(v = seq(720, 720 * 2, 720))
 
+with(filter(fake_actig, patient_ID == 1, Noon_Day %in% 1:3),
+     plot(Epoch, Square_Wave,
+          main = "Square Wave"))
+text(50, -0.5, "IV = 0.01\nIS = 0.95", adj = 0)
+abline(v = seq(720, 720 * 2, 720))
+
+with(filter(fake_actig, patient_ID == 1, Noon_Day %in% 1:3),
+     plot(Epoch, Square_Fuzz_p1,
+          main = "Square Wave + Gaussian Noise (SD = 0.1)"))
+text(50, -0.5, "IV = 0.05\nIS = 0.90", adj = 0)
+abline(v = seq(720, 720 * 2, 720))
+
+with(filter(fake_actig, patient_ID == 1, Noon_Day %in% 1:3), ##
+     plot(Epoch, Square_Fuzz_p5,
+          main = "Square Wave + Gaussian Noise (SD = 0.5)"))
+text(50, -1.5, "IV = 0.40\nIS = 0.75", adj = 0)
+abline(v = seq(720, 720 * 2, 720))
+
+with(filter(fake_actig, patient_ID == 1, Noon_Day %in% 1:3),
+     plot(Epoch, Square_Phase_p875,
+          main = "Square Wave at 87.5% Phase"))
+text(50, -0.5, "IV = 0\nIS = 0.45", adj = 0)
+abline(v = seq(720, 720 * 2, 720))
+
+with(filter(fake_actig, patient_ID == 1, Noon_Day %in% 1:3),
+     plot(Epoch, Sqaure_Fuzz_p1_Phase_p875,
+          main = "Square Wave at 87.5% Phase + Gaussian Noise (SD = 0.1)"))
+text(50, -0.5, "IV = 0.03\nIS = 0.45", adj = 0)
+abline(v = seq(720, 720 * 2, 720))
+
+with(filter(fake_actig, patient_ID == 1, Noon_Day %in% 1:3),
+     plot(Epoch, Sqaure_Fuzz_p5_Phase_p875,
+          main = "Square Wave at 87.5% Phase + Gaussian Noise (SD = 0.5)")) ##
+text(50, -0.5, "IV = 0.40\nIS = 0.40", adj = 0)
+abline(v = seq(720, 720 * 2, 720))
+
 dev.off()
+
 ## ------ Plot IV and IS ------
 
 longitudinal_plot <- function(var) {
