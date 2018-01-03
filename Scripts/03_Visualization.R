@@ -9,30 +9,61 @@ library(tidyverse)
 library(lubridate)
 library(reshape2)
 
-actigraphy_static <- readRDS(".\\Rmd\\Data\\actigraphy_data.rds") 
-actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds") 
-results <- readRDS(".\\Rmd\\Data\\results.rds") 
+source("Scripts/Functions.R")
+
+actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds")
+results <- readRDS(".\\Rmd\\Data\\results.rds")
 
 ## ------ Visualizing a single patient ------
 
-plot_patient <- function(patient, df) {
-  d1 <- dplyr::filter(df, patient_ID == patient) %>%
-    select(., Time, Light, Activity, Day, DateAbbr, Sleep_Acti) %>%
-    mutate(Activity_Scale = Activity * (max(Light, na.rm = T) / max(Activity, na.rm = T)),
-           Log_Light = log10(Light))
-  
-  p <- ggplot(d1, mapping = aes(x = Time)) +
-    geom_line(aes(y = Light), color = "Orange") +
-    geom_line(aes(y = Activity_Scale), color = "Black") +
-    facet_grid(Day + DateAbbr ~ .) +
-    scale_x_datetime(date_labels = "%I %p", date_minor_breaks = "1 hour") + 
-    scale_y_continuous(sec.axis = sec_axis(trans = ~ . * (max(d1$Activity, na.rm = T) / max(d1$Light, na.rm = T)),
-                                           name = "Activity")) +
-    ylab("Light") + 
-    labs(title = patient)
-  
-  plot(p)
+plot_patient(2, actigraphy)
+
+## ------ Average Day Activity ------
+
+pdf("Data/Plots/Avg_Patient_Day.pdf", width = 15, height = 9)
+for (i in unique(actigraphy$patient_ID)) {
+  plot_avg_patient_day(i, actigraphy)
 }
+dev.off()
+
+## ------ All Patients Avg Activity, Overlayed ------
+
+pdf("Data/Plots/Avg_Day_All_Patients.pdf", width = 15, height = 9)
+for (i in c("Activity", "Light")) {
+  plot_avg_all_patients(i, actigraphy)
+}
+dev.off()
+
+## ------ Longitudinal Plots ------
+
+longitudinal_plot("Activity_IS_moving_3")
+
+pdf("Rmd/Chad_Murchison/Chad_IV_IS_plots.pdf", width = 15, height = 12)
+
+longitudinal_plot("Activity_IS_moving_3")
+longitudinal_plot("Activity_IS_expanding_3")
+longitudinal_plot("Activity_IS_moving_7")
+longitudinal_plot("Activity_IS_expanding_7")
+longitudinal_plot("Activity_IV_moving_3")
+longitudinal_plot("Activity_IV_expanding_3")
+longitudinal_plot("Activity_IV_moving_7")
+longitudinal_plot("Activity_IV_expanding_7")
+longitudinal_plot("RA")
+
+dev.off()
+
+## ------ Slopegraphs: First and Last Week Averages ------
+
+pdf("Data/Plots/Slopegraphs.pdf", width = 15, height = 12)
+
+slopegraph("Activity_IV_moving_7", results$FL_results_final)
+slopegraph("Activity_IS_moving_7", results$FL_results_final)
+slopegraph("RA", results$FL_results_final)
+slopegraph("DAR", results$FL_results_final)
+slopegraph("SE", results$FL_results_final)
+slopegraph("Sleep_Minutes", results$FL_results_final)
+
+dev.off()
 
 ## ------ Light vs Activity ------
 
