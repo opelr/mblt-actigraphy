@@ -32,7 +32,7 @@ results$sleep_metrics <- xtabs(~ patient_ID + Sleep_Bouts + Sleep_Acti_Smooth + 
 
 ## ------ Activity Rhythm Stability ------
 
-#' Calculating 
+#' Calculating IV and IS
 
 IV_IS_combs <- expand.grid(c("Activity", "Light"), #, "Sleep_Thresh_Smooth_Int"
                            c("moving", "expanding"), c(3, 7)) %>% 
