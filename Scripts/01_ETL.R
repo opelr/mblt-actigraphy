@@ -1,8 +1,8 @@
 ## Script: Import and Shaping of Actiwatch Data
 ## Project: mblt-actigraphy
 ## Author: Ryan Opel -- @opelr
-## Date: 2017-11-15
-## Version: 0.3.0
+## Date: 2018-01-05
+## Version: 1.0.0
 
 library(magrittr)
 library(tidyverse)
@@ -19,13 +19,50 @@ FILE_PATH <- "D:/data/acquired_data/human/h4085/Actigraphy/CSV/"
 FILE_MASK <- "(.*)_New_Analysis.csv"
 
 ## ------ File Repository ------
-#' Build repository of file paths to be read in
+#' Build repository of file paths to be read later by two functions.
 
-acti_files <- data.frame(File = list.files(path = FILE_PATH, pattern = FILE_MASK)) %>%
+acti_files <- data.frame(File = list.files(path = FILE_PATH,
+                                           pattern = FILE_MASK)) %>%
   mutate(rootpath = normalizePath(paste0(FILE_PATH, File)))
 
 ## ------ Patient Catalog ------
+#' Import (or create) a table that links the unique ID for each
+#' participant (`patient_ID`), the watch serial # (`Actiwatch_ID`), and
+#' a way of discerning if your participant got light therapy.
 #' 
+#' If patients have multiple watches, separate serial numbers into multiple
+#' columns, and melt as done below. This will allow for merging of all data
+#' for a single participant, which will be done for the user in a later
+#' section.
+#' 
+#' Output should look like the following (example data):
+#' 
+#'     >head(catalog, 5)
+#'     ID   Group Actiwatch_ID Second_Actiwatch_ID LightPad_Kit
+#'      1     MBL     A12694.1                <NA>           19
+#'      2     MBL     A12641.1                <NA>            6
+#'      3     MBL     A12616.1            A22618.1           17
+#'      4 Control     A12622.1                <NA>         <NA>
+#'      5     MBL     A12624.1                <NA>           13
+#'     
+#'     >head(watch_ids,5 )
+#'     patient_ID   Group watch_ID Watch_Assign
+#'              1     MBL A12694.1      Primary
+#'              2     MBL A12641.1      Primary
+#'              3     MBL A12616.1      Primary
+#'              3     MBL A22618.1    Secondary
+#'              4 Control A12622.1      Primary
+#'     
+#'     >head(light_box, 5)
+#'     patient_ID MBLT_Group
+#'              1       TRUE
+#'              2       TRUE
+#'              3       TRUE
+#'              4      FALSE
+#'              5       TRUE
+#' 
+#' For Lim Lab: Pull the most recent Events_Master Excel document from the
+#'              H4085 folder in the Box account.
 
 catalog <- read.xlsx("Data/Raw/4085_Events_Master_Current.xlsx", 1) %>%
   select(ID, Group, Actiwatch_ID, Second_Actiwatch_ID, LightPad_Kit)
@@ -37,65 +74,32 @@ watch_ids <- melt(select(catalog, -LightPad_Kit), id = c("ID", "Group")) %>%
   select(-variable) %>%
   rename(watch_ID = value, patient_ID = ID)
 
-light_box <- catalog[, c("ID", "LightPad_Kit")] %>%
+light_box <- catalog[, c("ID", "Group")] %>%
   rename(patient_ID = ID) %>%
-  mutate(MBLT_Group = ifelse(is.na(LightPad_Kit), F, T)) %>%
-  select(-LightPad_Kit)
-
-## ------ PTSD Status from PCL-5 ------
-
-PCL <- read.csv("Data/Raw/4085_Baseline_PCL.csv") %>% 
-  select(-redcap_event_name, -pcl5_notes, -pcl5_complete) %>%
-  rename(patient_ID = record_id) %>%
-  mutate(pcl_sum = rowSums(.[, grepl("pcl5_[0-9]", colnames(.))]))
-
-pcl_b_cols <- colnames(PCL)[grepl('pcl5_[1-5]{1}', colnames(PCL))]
-pcl_c_cols <- colnames(PCL)[grepl('pcl5_[6-7]{1}', colnames(PCL))]
-pcl_d_cols <- colnames(PCL)[grepl('pcl5_([8-9]{1}|1[0-4]{1})', colnames(PCL))]
-pcl_e_cols <- colnames(PCL)[grepl('pcl5_(1[5-9]|20)', colnames(PCL))]
-
-PCL %<>%
-  mutate(pcl_b_intrusion = survSums(pcl_b_cols),
-         pcl_c_avoidance = survSums(pcl_c_cols),
-         pcl_d_mood_cognition = survSums(pcl_d_cols),
-         pcl_e_arousal_activity = survSums(pcl_e_cols),
-         cluster_ptsd =
-           rowSums(.[, pcl_b_cols] >= 2, na.rm = T) >= 1 &
-           rowSums(.[, pcl_c_cols] >= 2, na.rm = T) >= 1 &
-           rowSums(.[, pcl_d_cols] >= 2, na.rm = T) >= 2 &
-           rowSums(.[, pcl_e_cols] >= 2, na.rm = T) >= 2,
-         Group_PTSD = factor(ifelse(cluster_ptsd == T & pcl_sum >= 33,
-                                    "PTSD", "No_PTSD")))
-
-rm(list = regmatches(ls(), regexpr("pcl_[a-z]_cols", ls())))
-
-## ------ Patient Chronotype from rMEQ ------
-
-rMEQ <- read.csv("Data/Raw/4085_Baseline_rMEQ.csv") %>%
-  set_colnames(c("patient_ID", "Event_Name", "Wake_Time", "Refreshed",
-                 "Bed_Time", "Best_Time", "Chronotype", "Complete")) %>%
-  mutate(DAR_Wake_Time = mapply(Wake_Time, FUN = strip_waketime),
-         DAR_Bed_Time = mapply(DAR_Wake_Time, FUN = function(i) waketime_plus(i, 12)),
-         DAR_Light_Box_Time = mapply(DAR_Wake_Time, FUN = function(i) waketime_plus(i, 3))) %>%
-  select(patient_ID, DAR_Wake_Time, DAR_Bed_Time, DAR_Light_Box_Time)
+  mutate(MBLT_Group = ifelse(Group == "Control", F, T)) %>%
+  select(-Group)
 
 ## ------ Create Data Frames ------
 
-# Append header information onto file list data.frame
-acti_files <- do.call("rbind", lapply(acti_files$rootpath, get_actigraphy_headers)) %>%
+#' Append header information onto file list dataframe.
+acti_files <- lapply(acti_files$rootpath, get_actigraphy_headers) %>%
+  do.call("rbind", .) %>%
   cbind(acti_files, .)
 
-# Create main data.frame
-actigraphy <- do.call("rbind", lapply(acti_files$rootpath, parse_actigraphy_data)) %>%
+#' Create the main dataframe using the `parse_actigraphy_data` function.
+actigraphy <- lapply(acti_files$rootpath, parse_actigraphy_data) %>%
+  do.call("rbind", .) %>%
   mutate(Date = as.character(Date))
 
-# Get sunrise and sunset times
+#' Pulling sunrise and sunset times for Portland (note the long and lat).
+#' It would be good to incorporate individual participants' addresses/cities,
+#' though I'm worried that this could interfere with PHI.
 sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
   get_sun_times(lat = 45.5231, long = -122.6765, date = as.character(x))
   })) %>%
   mutate(Date = as.character(Date))
 
-# Merge all helper DFs wtih major DF
+#' Merge all the helper dataframes wtih our main dataframe.
 actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
   mutate(SunPeriod = factor(ifelse(DateTime > Sunrise & DateTime < Sunset, "Day",
                             "Night"))) %>%
@@ -110,56 +114,78 @@ actigraphy %<>% merge(., sunsetDF, by = "Date") %>%
          Day = factor(Day, levels = unique(Day))) %>%
   merge(., watch_ids, by = "watch_ID") %>%
   merge(., light_box, by = "patient_ID") %>%
-  merge(., PCL[, c("patient_ID", "Group_PTSD")], by = "patient_ID") %>%
-  merge(., rMEQ, by = "patient_ID") %>%
-  arrange(patient_ID, DateTime) %>%
-  filter(!patient_ID %in% c("15")) %>%
-  mutate(DAR = DAR_ifelse(., "DAR_Wake_Time", "DAR_Bed_Time", "Day", "Night"),
-         Light_Box_Period = DAR_ifelse(., "DAR_Wake_Time", "DAR_Light_Box_Time", "Light", "Non_Light"),
-         ZT_6 = cut(Time, seq(strptime("00:00", "%R"), by = "6 hours", length.out = 5),
+  mutate(ZT_6 = cut(Time, seq(strptime("00:00", "%R"), by = "6 hours", length.out = 5),
                     labels = c("12AM-6AM", "6AM-12PM", "12PM-6PM", "6PM-12AM")),
          ZT_12 = cut(Time, seq(strptime("06:00", "%R"), by = "12 hours", length.out = 3),
                     labels = c("6AM-6PM", "6PM-6AM")),
          ZT_12 = factor(ifelse(is.na(ZT_12), "6PM-6AM", as.character(ZT_12)),
-                        levels = c("6AM-6PM", "6PM-6AM")))
+                        levels = c("6AM-6PM", "6PM-6AM"))) %>%
+  arrange(patient_ID, DateTime)
 
-rm(list = c("PCL", "sunsetDF", "light_box"))
+rm(list = c("sunsetDF", "light_box"))
 
 ## ------ Filter out Overlapping Dates ------
 
-#' FIXME: Will be good to put this data.frame into a CSV when we have more CCT
-#' patients, but this works fine until January.
+#' For patients with multiple watches, we frequently run into the problem of
+#' overlapping temporal data, especially when watches are replaced during a
+#' long, continuous recording period.
+#' 
+#' This section solves this problem by filtering data that comes before/after
+#' the watch switch. Here, the switch is hard-coded to occur at 11:00 AM,
+#' but that wouldn't be hard to change on a per-patient basis.
+#' 
+#' The date origin at '1899-12-30' is due to importing from Excel -- worth
+#' noting depending where your data is coming from.
+#' 
+#' Again, you'll need a dataframe that indicates the date of change, and
+#' the watch serial number.
 
-overlap_dates <- data.frame(patient_ID = c(10, 11, 13, 14),
-                            DateTimePrimary = as.POSIXct("2017-10-13 10:58:00",
-                                                         tz = "America/Los_Angeles")) %>%
-  mutate(DateTimeSecondary = DateTimePrimary + minutes(2))
+overlap_dates <- read.xlsx("Data/Raw/4085_Events_Master_Current.xlsx", 1) %>%
+  select(ID, Actiwatch.Return.Date, Second_Actiwatch_ID) %>%
+  set_colnames(gsub("[.]", "_", colnames(.))) %>%
+  rename(patient_ID = ID) %>%
+  mutate(Actiwatch_Return_Date = as.Date(Actiwatch_Return_Date,
+                                         origin = "1899-12-30"),
+         DateTimePrimary = as.POSIXct(paste(Actiwatch_Return_Date, "10:58:00"),
+                                      tz = "America/Los_Angeles",
+                                      format = "%F %T"),
+         DateTimeSecondary = DateTimePrimary + minutes(2)) %>%
+  filter(!is.na(Second_Actiwatch_ID)) %>%
+  select(-Actiwatch_Return_Date, -Second_Actiwatch_ID)
 
-actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
+actigraphy %<>% split(., actigraphy$patient_ID) %>%
   lapply(., function (j) {
     
-    pat_ID <- unique(j$patient_ID)
+      pat_ID <- unique(j$patient_ID)
     
     if (pat_ID %in% overlap_dates$patient_ID) {
-      j <- split(j, j$Watch_Assign) %>%
-        lapply(., function (ii) {
-          if (unique(ii$Watch_Assign) == "Primary") {
-            ii <- filter(ii, DateTime <= overlap_dates$DateTimePrimary[overlap_dates$patient_ID == pat_ID])
-          } else if (unique(ii$Watch_Assign) == "Secondary") {
-            ii <- filter(ii, DateTime >= overlap_dates$DateTimeSecondary[overlap_dates$patient_ID == pat_ID])
-          }
-        }) %>% 
-        do.call("rbind", .)
+      j <- split(j, j$Watch_Assign) 
+      
+      if (all(sapply(j, nrow) > 0)) {
+        j %<>%
+          lapply(., function (ii) {
+            if (unique(ii$Watch_Assign) == "Primary") {
+              ii <- filter(ii, DateTime <= overlap_dates$DateTimePrimary[overlap_dates$patient_ID == pat_ID])
+            } else if (unique(ii$Watch_Assign) == "Secondary") {
+              ii <- filter(ii, DateTime >= overlap_dates$DateTimeSecondary[overlap_dates$patient_ID == pat_ID])
+            }
+          })
+      }
+      j %<>% do.call("rbind", .)
     }
     return(j)
   }) %>%
-  do.call("rbind", .)
+  do.call("rbind", .) %>%
+  arrange(patient_ID, DateTime) %>%
+  set_rownames(1:nrow(.))
+
+rm(overlap_dates)
 
 ## ------ Determining Day Number by Date ------
 
-#' Day number breaks when we give patients multiple watches, as each watch
-#' starts at 1. Instead, we'll enumerate the ordered dates for each patient to
-#' determine day number.
+#' Similar to the prvious section, day number breaks when we give patients
+#' multiple watches, as each watch starts at Day 1. Instead, we'll enumerate
+#' the ordered dates from each patient to determine day number.
 
 updated_day_date <- xtabs(~ patient_ID + Date, actigraphy) %>%
   as.data.frame %>%
@@ -174,12 +200,14 @@ actigraphy %<>%
   select(-Day) %>%
   merge(., updated_day_date, by = c("patient_ID", "Date"))
 
-updated_day_date %<>%
-  mutate(DT = as.POSIXct(strptime(paste(Date, "12:00:00"), "%F %T")))
-
 rm(updated_day_date)
 
 ## ------ Lotjonen Parameters, Off-Wrist Detection, and Sleep Smoothing ------
+
+#' This and the following few sections add a ton of variables to our main
+#' dataframe. Most relate to various ways to interpret sleep staging, light
+#' exposure, and activity, but there are a few notable exceptions, like
+#' `Noon_Day`.
 
 actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
   lapply(., function(ii) {
@@ -237,8 +265,8 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
     
     ii %<>% merge(., which_day_date, by = "Noon_Date", all.x = T) %>%
       select(-Noon_Date) %>%
-      mutate(Noon_Day = opelr::numfac(Noon_Day),
-             Noon_Day = Noon_Day - (min(Noon_Day, na.rm = T))) %>%
+      mutate(Noon_Day = opelr::numfac(Noon_Day)) %>%
+      #        Noon_Day = Noon_Day - (min(Noon_Day, na.rm = T))) %>%
       arrange(DateTime)
 
     return(ii)
@@ -248,7 +276,8 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
 
 ## ------ Light Adherence ------
 
-# Count periods where median Light window > 10,000/5,000 lux/m2 across 15/30 epochs
+#' Count periods where median Light window > 5,000/10,000 lux/m2 across
+#'  15/30 epochs.
 actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
@@ -264,7 +293,7 @@ actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
   do.call("rbind", .) %>%
   set_rownames(1:nrow(.))
 
-# Smooth Light adherence
+#' Smooth Light adherence columns generated in previous code block.
 actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
   lapply(., function(ii) {
     ii %<>% 
@@ -278,7 +307,7 @@ actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
   do.call("rbind", .) %>%
   set_rownames(1:nrow(.))
 
-## ------ Activity Windowing - EE ------
+## ------ Activity Windowing ------
 
 actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
   lapply(., function(ii) {
@@ -299,18 +328,15 @@ actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
 
 ## ------ Saving RDS ------
 
+#' Save dataframes before we filter out 'off-wrist' days.
+
 saveRDS(acti_files, ".\\Rmd\\Data\\actigraphy_header.rds")
 saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_static.rds")
 
 ## ------ Off Wrist Filtering ------
 
-#' TODO: How should the overlap of data be handled? Currently we're throwing
-#' out two days per patient in the middle of recording, which seems wasteful.
-#' I'm thinking it would be good to record the exact time a new watch is
-#' placed on the wrist of a CCT patient, and we can cut the tail/head of watch
-#' #1/#2 at that point, respectively. 
-
-### Exclude by any 3+ hour window
+#' Exclude days that contain any 3+ hour window of inactivity
+#' (`Thresh_Activity_Change_Window`).
 off_wrist <- xtabs(~ patient_ID + Thresh_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
   as.data.frame.table %>%
   reshape2::dcast(., formula = patient_ID + Noon_Day ~ Thresh_Activity_Change_Window,
@@ -327,24 +353,11 @@ off_wrist <- xtabs(~ patient_ID + Thresh_Activity_Change_Window + Noon_Day, data
            do.call("c", .),
          At_Least_96_Hours_On = Consec_Days >= 3 & Watch_On == 720)
 
-### Merge
-actigraphy <- merge(actigraphy,
+actigraphy  %<>% merge(.,
                     off_wrist[,c("patient_ID", "Noon_Day", "At_Least_96_Hours_On")],
                     by = c("patient_ID", "Noon_Day")) %>%
   dplyr::filter(At_Least_96_Hours_On == T) %>%
   arrange(patient_ID, DateTime)
-
-## ------ Hand-Added Medical History -----
-
-CCT_medHist <- data.frame(patient_ID = c(10, 11, 12, 13, 14, 15, 16),
-                          Sex = c("F", "M", "F", "F", "M", "M", "M"),
-                          PTSD_CC = c(T, T, F, T, F, T, T),
-                          TBI_CC = c(F, F, F, F, F, T, F),
-                          Depression_CC = c(F, F, F, F, T, F, F),
-                          Anxiety_CC = c(T, F, F, F, F, F, F),
-                          OSA_CC = c(F, F, F, F, F, T, T))
-
-actigraphy %<>% merge(., CCT_medHist, "patient_ID", all.x = T)
 
 ## ------ Save RDS ------
 
