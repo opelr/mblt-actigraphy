@@ -21,8 +21,12 @@ get_actigraphy_headers <- function(path) {
   acti <- read.table(path, header = FALSE, sep = ",", row.names = NULL,
                      col.names = paste0("X", 1:44), fill = T)
   
+  # Patient name from rootpath
+  patient_name <- gsub("_(.*)", "", gsub("(.*)\\\\", "", path))
+  
+  
   # Strip header information to temporary variables
-  patient_name <- as.character(acti$X2[acti$X1 == "Identity:"])
+  # patient_name <- as.character(acti$X2[acti$X1 == "Identity:"])
   patient_sex <- as.character(acti$X2[acti$X1 == "Gender:"])
   patient_DOB <- as.character(acti$X2[acti$X1 == "Date of Birth:"])
   patient_age <- as.character(acti$X2[acti$X1 == "Age (at start of data collection):"])

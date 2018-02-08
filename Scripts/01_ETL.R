@@ -95,7 +95,7 @@ actigraphy <- lapply(acti_files$rootpath, parse_actigraphy_data) %>%
 #' It would be good to incorporate individual participants' addresses/cities,
 #' though I'm worried that this could interfere with PHI.
 sunsetDF <- do.call("rbind", lapply(unique(actigraphy$Date), function (x) {
-  get_sun_times(lat = 45.5231, long = -122.6765, date = as.character(x))
+  get_sun_times(lat = 45.5231, long = -122.6765, date = x)
   })) %>%
   mutate(Date = as.character(Date))
 
@@ -260,7 +260,8 @@ actigraphy <- split(actigraphy, actigraphy$patient_ID) %>%
       as.data.frame.table(.) %>%
       dplyr::filter(Freq > 0) %>%
       rename(Noon_Day = Var1, Noon_Date = Var2) %>%
-      mutate(Noon_Date = as.character(Noon_Date)) %>%
+      mutate(Noon_Date = as.character(Noon_Date),
+             Noon_Day = as.integer(Noon_Day) - 2) %>%
       dplyr::select(-Freq)
     
     ii %<>% merge(., which_day_date, by = "Noon_Date", all.x = T) %>%
