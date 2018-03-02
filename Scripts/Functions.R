@@ -63,7 +63,7 @@ get_actigraphy_headers <- function(path) {
   return(header_info)
 }
 
-parse_actigraphy_data <- function(path) {
+parse_actigraphy_data <- function(path, manually_scored=FALSE) {
   # Strips epoch-by-epoch data from exported Actiware CSV files
   # 
   # Args:
@@ -89,11 +89,32 @@ parse_actigraphy_data <- function(path) {
   acti <- acti_3[2:nrow(acti_3), 1:length(header_cols)] %>%
     set_colnames(as.character(header_cols)) %>%
     set_rownames(1:nrow(.)) %>%
-    dplyr::select(., -`Interval Status`, -`S/W Status`) %>%
-    rename(., Light = `White Light`, Sleep_Wake = `Sleep/Wake`) %>%
+    dplyr::select(., -`S/W Status`) %>%
+    rename(., Light = `White Light`, Sleep_Wake = `Sleep/Wake`, Interval = `Interval Status`) %>%
     mutate(Sleep_Wake = factor(Sleep_Wake, levels = 0:1,
-                               labels = c("Sleep", "Wake"))) %>%
+                               labels = c("Sleep", "Wake")),
+           Interval = factor(ifelse(Interval == "ACTIVE", "Active", "Rest"))) %>%
     rename(Sleep_Acti = Sleep_Wake)
+  
+  if (manually_scored) {
+    ## Bed-/Wake-time estimation
+    make_sleep_interval <- function(vec) {
+      ## Rename to four intervals
+      sleep_rle <- rle(as.character(vec))
+      
+      if (length(sleep_rle$values) > 4) {
+        sleep_rle$values[seq(2, length(sleep_rle$values), 4)] <- "Falling_Asleep"
+        sleep_rle$values[seq(3, length(sleep_rle$values), 4)] <- "Sleeping"
+        sleep_rle$values[seq(4, length(sleep_rle$values), 4)] <- "Waking_Up"
+      }
+      
+      temp_df <- data.frame(unclass(sleep_rle))
+      sleep_int_out <- rep(temp_df$values, temp_df$lengths)
+      return(sleep_int_out)
+    }
+    
+    acti$Interval <- make_sleep_interval(acti$Interval)
+  }
   
   # Get patient name
   nam <- as.character(acti_files$File[acti_files$rootpath == path])
@@ -118,7 +139,6 @@ parse_actigraphy_data <- function(path) {
            Month = format(DateTime, format = "%B"))
   
   return(acti)
-  
 }
 
 ## ------ Sunset Function ------
@@ -536,8 +556,6 @@ clean_adherence <- function(data, column) {
     rle_df_to_vector
   return(out)
 }
-
-
 
 # ------------------------ Process ------------------------
 

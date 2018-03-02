@@ -20,20 +20,30 @@ results <- list()
 #' Calculating Total Sleep Time (TST), sleep efficiency (SE), and
 #' Wake After Sleep Onset (WASO)
 
-results$sleep_metrics <- xtabs(~ patient_ID + Sleep_Bouts + Sleep_Acti_Smooth + Noon_Day,
+results$sleep_metrics <- xtabs(~ patient_ID + Interval + Sleep_Acti_Smooth + Noon_Day,
                                data = actigraphy) %>%
   as.data.frame %>%
-  dcast(., patient_ID + Noon_Day + Sleep_Bouts ~ Sleep_Acti_Smooth,
+  dcast(., patient_ID + Noon_Day + Interval ~ Sleep_Acti_Smooth,
         value.var = "Freq") %>%
-  filter(Sleep_Bouts == "Sleep_Bout", (Sleep + Wake) > 0) %>%
+  filter(Interval == "Sleeping", (Sleep + Wake) > 0) %>%
   mutate(Sleep_Minutes = Sleep * 2,
          WASO_Minutes = Wake * 2,
          SE = 100 * Sleep / (Wake + Sleep))
 
+## ------ Sleep Latency ------
+
+results$sleep_latency <- xtabs(~ patient_ID + Interval + Noon_Day,
+                               data = actigraphy) %>%
+  as.data.frame %>%
+  filter(Interval %in% c("Falling_Asleep", "Waking_Up")) %>%
+  dcast(., patient_ID + Noon_Day ~ Interval, value.var = "Freq") %>%
+  mutate(Sleep_Latency_Minutes = Falling_Asleep * 2,
+         Wake_Latency_Minutes = Waking_Up * 2) %>%
+  select(-Falling_Asleep, -Waking_Up)
+
 ## ------ Activity Rhythm Stability ------
 
 #' Calculating IV and IS
-
 IV_IS_combs <- expand.grid(c("Activity", "Light"), #, "Sleep_Thresh_Smooth_Int"
                            c("moving", "expanding"), c(3, 7)) %>% 
   rename(var = Var1, window = Var2, size = Var3) %>%
@@ -133,7 +143,7 @@ results$patient_catalog <- xtabs(~ patient_ID + Noon_Day + Group + Date, actigra
 ## ------ Major Metrics by Patient by Day ------
 
 major_results <- results$sleep_metrics %>%
-          select(-Sleep_Bouts, -Sleep, -Wake) 
+          select(-Interval, -Sleep, -Wake) 
 
 for (i in 2:length(results)) {
   major_results <- merge(major_results, results[i][[1]],
@@ -155,4 +165,4 @@ rm(major_results)
 
 ## ------ Save RDS ------
 
-saveRDS(results, ".\\Rmd\\Data\\results.rds")
+saveRDS(results, ".\\Rmd\\Data\\actigraphy_results.rds")

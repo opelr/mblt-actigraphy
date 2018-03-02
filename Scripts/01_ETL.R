@@ -16,7 +16,7 @@ library(reshape2)
 source("Scripts/Functions.R")
 
 FILE_PATH <- "D:/data/acquired_data/human/h4085/Actigraphy/CSV/"
-FILE_MASK <- "(.*)_New_Analysis.csv"
+FILE_MASK <- "(.*)_Bedtime.csv"
 
 ## ------ File Repository ------
 #' Build repository of file paths to be read later by two functions.
@@ -87,7 +87,7 @@ acti_files <- lapply(acti_files$rootpath, get_actigraphy_headers) %>%
   cbind(acti_files, .)
 
 #' Create the main dataframe using the `parse_actigraphy_data` function.
-actigraphy <- lapply(acti_files$rootpath, parse_actigraphy_data) %>%
+actigraphy <- lapply(acti_files$rootpath, function(ii) parse_actigraphy_data(ii, TRUE)) %>%
   do.call("rbind", .) %>%
   mutate(Date = as.character(Date))
 
