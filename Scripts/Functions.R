@@ -228,7 +228,7 @@ actiware_sleep <- function(df, column = "Activity", threshold) {
   #   A same-length vector of Sleep and Wake values
   #
   # Example:
-  #   actiware_sleep(dplyr::filter(actigraphy, watch_ID == "A26598.1"), threshold = 40))
+  #   actiware_sleep(dplyr::filter(actigraphy, watch_ID == "A26598.1"), threshold = 40)
   
   x <- df[, column]
   

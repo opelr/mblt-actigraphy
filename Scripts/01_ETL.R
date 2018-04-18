@@ -4,26 +4,27 @@
 ## Date: 2018-01-05
 ## Version: 1.0.0
 
-library(magrittr)
-library(tidyverse)
-library(lubridate)
-library(maptools)
-library(zoo)
-library(openxlsx)
-library(reshape2)
+suppressMessages(library(magrittr))
+suppressMessages(library(tidyverse))
+suppressMessages(library(lubridate))
+suppressMessages(library(maptools))
+suppressMessages(library(zoo))
+suppressMessages(library(openxlsx))
+suppressMessages(library(reshape2))
 # devtools::install_github("opelr/opelR")
 
 source("Scripts/Functions.R")
 
-FILE_PATH <- "D:/data/acquired_data/human/h4085/Actigraphy/CSV/"
-FILE_MASK <- "(.*)_Bedtime.csv"
+# FILE_PATH <- "D:/data/acquired_data/human/h4085/Actigraphy/CSV/"
+# FILE_MASK <- "(.*)_Bedtime.csv"
 
 ## ------ File Repository ------
 #' Build repository of file paths to be read later by two functions.
 
-acti_files <- data.frame(File = list.files(path = FILE_PATH,
-                                           pattern = FILE_MASK)) %>%
-  mutate(rootpath = normalizePath(paste0(FILE_PATH, File)))
+# acti_files <- data.frame(File = list.files(path = FILE_PATH,
+#                                            pattern = FILE_MASK)) %>%
+#   mutate(rootpath = normalizePath(paste0(FILE_PATH, File))) %>%
+#   filter(!grepl('-', File))
 
 ## ------ Patient Catalog ------
 #' Import (or create) a table that links the unique ID for each
@@ -331,35 +332,35 @@ actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
 
 #' Save dataframes before we filter out 'off-wrist' days.
 
-saveRDS(acti_files, ".\\Rmd\\Data\\actigraphy_header.rds")
-saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_static.rds")
+# saveRDS(acti_files, ".\\Rmd\\Data\\actigraphy_header.rds")
+# saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_static.rds")
 
 ## ------ Off Wrist Filtering ------
 
 #' Exclude days that contain any 3+ hour window of inactivity
 #' (`Thresh_Activity_Change_Window`).
-off_wrist <- xtabs(~ patient_ID + Thresh_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
-  as.data.frame.table %>%
-  reshape2::dcast(., formula = patient_ID + Noon_Day ~ Thresh_Activity_Change_Window,
-                  value.var = "Freq") %>% 
-  filter((`FALSE` + `TRUE`) > 0) %>%
-  rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
-  mutate(Percent_Off = 100 * Watch_Off/(Watch_On + Watch_Off),
-         Total_Epochs = Watch_On + Watch_Off) %>%
-  dplyr::filter(complete.cases(.)) %>%
-  mutate(Consec_Days = split(., .[, "patient_ID"]) %>%
-           lapply(., function(ii) {
-             rep(rle(ii$Watch_On == 720)$lengths, rle(ii$Watch_On == 720)$lengths)
-           }) %>%
-           do.call("c", .),
-         At_Least_96_Hours_On = Consec_Days >= 3 & Watch_On == 720)
-
-actigraphy  %<>% merge(.,
-                    off_wrist[,c("patient_ID", "Noon_Day", "At_Least_96_Hours_On")],
-                    by = c("patient_ID", "Noon_Day")) %>%
-  dplyr::filter(At_Least_96_Hours_On == T) %>%
-  arrange(patient_ID, DateTime)
+# off_wrist <- xtabs(~ patient_ID + Thresh_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
+#   as.data.frame.table %>%
+#   reshape2::dcast(., formula = patient_ID + Noon_Day ~ Thresh_Activity_Change_Window,
+#                   value.var = "Freq") %>% 
+#   filter((`FALSE` + `TRUE`) > 0) %>%
+#   rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
+#   mutate(Percent_Off = 100 * Watch_Off/(Watch_On + Watch_Off),
+#          Total_Epochs = Watch_On + Watch_Off) %>%
+#   dplyr::filter(complete.cases(.)) %>%
+#   mutate(Consec_Days = split(., .[, "patient_ID"]) %>%
+#            lapply(., function(ii) {
+#              rep(rle(ii$Watch_On == 720)$lengths, rle(ii$Watch_On == 720)$lengths)
+#            }) %>%
+#            do.call("c", .),
+#          At_Least_96_Hours_On = Consec_Days >= 3 & Watch_On == 720)
+# 
+# actigraphy  %<>% merge(.,
+#                     off_wrist[,c("patient_ID", "Noon_Day", "At_Least_96_Hours_On")],
+#                     by = c("patient_ID", "Noon_Day")) %>%
+#   dplyr::filter(At_Least_96_Hours_On == T) %>%
+#   arrange(patient_ID, DateTime)
 
 ## ------ Save RDS ------
 
-saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_filtered.rds")
+# saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_filtered.rds")

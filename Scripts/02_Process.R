@@ -1,19 +1,18 @@
 ## Script: Analysis of Actiwatch Data
 ## Project: mblt-actigraphy
 ## Author: Ryan Opel -- @opelr
-## Date: 2018-01-05
-## Version: 1.0.0
+## Date: 2018-04-18
+## Version: 1.0.1
 
-library(magrittr)
-library(tidyverse)
-library(lubridate)
-library(reshape2)
-library(zoo)
+suppressMessages(library(magrittr))
+suppressMessages(library(tidyverse))
+suppressMessages(library(lubridate))
+suppressMessages(library(reshape2))
+suppressMessages(library(zoo))
 
-source("Scripts/Functions.R")
-
-actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds")
 results <- list()
+# source("Scripts/Functions.R")
+# actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds")
 
 ## ------ Basic Sleep Metrics ------
 
@@ -45,7 +44,7 @@ results$sleep_latency <- xtabs(~ patient_ID + Interval + Noon_Day,
 
 #' Calculating IV and IS
 IV_IS_combs <- expand.grid(c("Activity", "Light"), #, "Sleep_Thresh_Smooth_Int"
-                           c("moving", "expanding"), c(3, 7)) %>% 
+                           c("moving"), c(3)) %>% #, "expanding", 7
   rename(var = Var1, window = Var2, size = Var3) %>%
   arrange(var, window, size)
 
@@ -111,15 +110,15 @@ results$DAR_77 <- aggregate(Activity ~ patient_ID + DAR_77 + Noon_Day, actigraph
   filter(complete.cases(.)) %>%
   arrange(patient_ID, Noon_Day)
 
-if ("DAR" %in% colnames(actigraphy)) {
-  #' DAR == 12-hour period based on individual's self-reported chronotype
-  results$DAR <- aggregate(Activity ~ patient_ID + DAR + Noon_Day, actigraphy, mean) %>%
-    reshape2::dcast(., formula = patient_ID + Noon_Day ~ DAR, value.var = "Activity") %>%
-    set_colnames(c("patient_ID", "Noon_Day", "Day", "Night")) %>%
-    mutate(DAR = (Day/(Day + Night))) %>%
-    filter(complete.cases(.)) %>%
-    arrange(patient_ID, Noon_Day)
-}
+#' if ("DAR" %in% colnames(actigraphy)) {
+#'   #' DAR == 12-hour period based on individual's self-reported chronotype
+#'   results$DAR <- aggregate(Activity ~ patient_ID + DAR + Noon_Day, actigraphy, mean) %>%
+#'     reshape2::dcast(., formula = patient_ID + Noon_Day ~ DAR, value.var = "Activity") %>%
+#'     set_colnames(c("patient_ID", "Noon_Day", "Day", "Night")) %>%
+#'     mutate(DAR = (Day/(Day + Night))) %>%
+#'     filter(complete.cases(.)) %>%
+#'     arrange(patient_ID, Noon_Day)
+#' }
 
 ## ------ Total Activity and Light Exposure ------
 
@@ -165,4 +164,4 @@ rm(major_results)
 
 ## ------ Save RDS ------
 
-saveRDS(results, ".\\Rmd\\Data\\actigraphy_results.rds")
+# saveRDS(results, ".\\Rmd\\Data\\actigraphy_results.rds")

@@ -1,18 +1,14 @@
 ## Script: Inclusion of Lab-Specific Metrics (REDCap, Latency Estimations, etc)
 ## Project: mblt-actigraphy
 ## Author: Ryan Opel -- @opelr
-## Date: 2018-01-05
-## Version: 0.1.0
+## Date: 2018-04-18
+## Version: 1.0.1
 
-library(magrittr)
-library(tidyverse)
-library(lubridate)
-library(reshape2)
-library(zoo)
-
-source("Scripts/Functions.R")
-
-actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds")
+suppressMessages(library(magrittr))
+suppressMessages(library(tidyverse))
+suppressMessages(library(lubridate))
+suppressMessages(library(reshape2))
+suppressMessages(library(zoo))
 
 #' In previous versions of this repository, there were many code snippets that
 #' were not only a) of exclusive interest to the lab, but b) caused the scripts
@@ -21,11 +17,14 @@ actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds")
 #' This script collates all those bits and pieces, making the rest of the
 #' repository more friendly to collaborators, other users, etc.
 #' 
-#' This repoository is still not perfectly generalized, and probably never will
+#' This repository is still not perfectly generalized, and probably never will
 #' be. Users will continue to change certain file-paths and -masks, however
 #' with the changes made by this script/branch, it is my hope that the
 #' repository will *at least* not break when run outside of our development
 #' environment.
+
+# source("Scripts/Functions.R")
+# actigraphy <- readRDS(".\\Rmd\\Data\\actigraphy_filtered.rds")
 
 ## ------ PTSD Status from PCL-5 ------
 
@@ -68,7 +67,6 @@ CCT_medHist <- data.frame(patient_ID = c(10, 11, 12, 13, 14, 15, 16),
                           OSA_CCT = c(F, F, F, F, F, T, T))
 
 ## ------ Patient Chronotype from rMEQ ------
-#' FIXME: rMEQ bedtime estimates belong in 'Proprietary' script...
 #' Create DAR estimates (in following section) based on published criteria
 
 rMEQ <- read.csv("Data/Raw/4085_Baseline_rMEQ.csv") %>%
@@ -89,6 +87,7 @@ actigraphy %<>%
   merge(., CCT_medHist, "patient_ID", all.x = T) %>%
   arrange(patient_ID, DateTime)
 
+rm(CCT_medHist, rMEQ)
 ## ------ Save RDS ------
 
-saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_filtered.rds")
+# saveRDS(actigraphy, ".\\Rmd\\Data\\actigraphy_filtered.rds")
