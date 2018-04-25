@@ -20,7 +20,6 @@
 #'   6. Save RDS object;
 #'   7. Repeat process with the other scripts.
 
-
 suppressMessages(library(optparse))
 suppressMessages(library(tidyverse))
 suppressMessages(library(magrittr))

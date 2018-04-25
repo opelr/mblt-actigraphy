@@ -19,4 +19,4 @@ If ($Files_Join -eq "") {
   $Files_Join = " "
 }
 
-Rscript $Script_Path -f $Files_JoinRscript $Script_Path -f $Files_Join
+Rscript $Script_Path -f $Files_Join

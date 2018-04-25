@@ -40,6 +40,24 @@ results$sleep_latency <- xtabs(~ patient_ID + Interval + Noon_Day,
          Wake_Latency_Minutes = Waking_Up * 2) %>%
   select(-Falling_Asleep, -Waking_Up)
 
+## ------ Bedtime Stability -------
+
+#' Get the bedtime and waketime for each day, then take the average to compute
+#' the "midsleep" time. Then, convert all three of these times to numeric
+#' so that we can take averages more easily.
+
+results$bedtime <- aggregate(DateTime ~ patient_ID + Noon_Day + Interval, actigraphy, min) %>% 
+  arrange(patient_ID, Noon_Day, Interval) %>%
+  dcast(., patient_ID + Noon_Day ~ Interval, value.var = "DateTime") %>%
+  mutate(Sleeping = as.POSIXct(Sleeping, origin = "1970-01-01 00:00:00", tz = "America/Los_Angeles"),
+         Waking_Up = as.POSIXct(Waking_Up, origin = "1970-01-01 00:00:00", tz = "America/Los_Angeles"),
+         Mid_Sleep = suppressWarnings(as.POSIXct(((unclass(Sleeping) + unclass(Waking_Up)) / 2),
+                                origin = "1970-01-01 00:00:00", tz = "America/Los_Angeles")),
+         Time_Bed = hour(ymd_hms(Sleeping)) + minute(ymd_hms(Sleeping))/60,
+         Time_Wake = hour(ymd_hms(Waking_Up)) + minute(ymd_hms(Waking_Up))/60,
+         Time_Midsleep = hour(ymd_hms(Mid_Sleep)) + minute(ymd_hms(Mid_Sleep))/60) %>%
+  select(-contains("unclass"), -Active, -Falling_Asleep)
+
 ## ------ Activity Rhythm Stability ------
 
 #' Calculating IV and IS
@@ -141,6 +159,7 @@ results$patient_catalog <- xtabs(~ patient_ID + Noon_Day + Group + Date, actigra
 
 ## ------ Major Metrics by Patient by Day ------
 
+results$major_results <- NULL
 major_results <- results$sleep_metrics %>%
           select(-Interval, -Sleep, -Wake) 
 
