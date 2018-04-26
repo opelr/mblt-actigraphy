@@ -339,10 +339,11 @@ actigraphy <- split(actigraphy, actigraphy$watch_ID) %>%
 
 #' Exclude days that contain any 3+ hour window of inactivity
 #' (`Thresh_Activity_Change_Window`).
+
 # off_wrist <- xtabs(~ patient_ID + Thresh_Activity_Change_Window + Noon_Day, data = actigraphy) %>%
 #   as.data.frame.table %>%
 #   reshape2::dcast(., formula = patient_ID + Noon_Day ~ Thresh_Activity_Change_Window,
-#                   value.var = "Freq") %>% 
+#                   value.var = "Freq") %>%
 #   filter((`FALSE` + `TRUE`) > 0) %>%
 #   rename(Watch_On = `FALSE`, Watch_Off = `TRUE`) %>%
 #   mutate(Percent_Off = 100 * Watch_Off/(Watch_On + Watch_Off),

@@ -4,9 +4,12 @@
 ## Date: 2018-04-18
 ## Version: 1.0.0
 
+# TODO: If patient is updated, pull their data from the old data frames
+#       before appending new data
+
 #' This script acts as a general interface between the bash script `actigraphy_csv_monitor`
 #' and the R processing scripts `01_...` - `02_...`.
-#' 
+#'
 #' The data-processing pipeline is detailed below:
 #'   1. Run the `actigraphy_csv_monitor` bash script on a 24-hour cron job. This
 #'      script monitors the directory containing raw actigraphy CSV files. It gets
@@ -35,7 +38,6 @@ opt <- parse_args(opt_parser)
 
 ### Handle CLI Input
 input_string <- opt$file
-# input_string <- "A26623.2_2_16_2018_8_00_00_AM_Bedtime.csv---A26649.1_12_28_2017_8_00_00_PM_Bedtime.csv---A26825.2_2_16_2018_8_00_00_AM_Bedtime.csv"
 
 if (!is.null(input_string)) {
   new_files <- data.frame(Files = strsplit(input_string, "---")) %>%
@@ -55,7 +57,7 @@ acti_files <- data.frame(File = list.files(path = FILE_PATH,
   filter(!grepl('-', File))
 
 if (exists("new_files")) {
-  acti_files %<>%
+  acti_files <- acti_files %>%
     filter(File %in% new_files$Files)
 }
 
@@ -90,10 +92,12 @@ if (is.data.frame(actigraphy_headers_old) &
 
 ## ------ Source ETL Script and Save Concat. RDS files ------
 
-try_save_RDS <- function(new_obj, old_obj, path) {
+try_save_RDS <- function(new_obj, old_obj, column, path) {
   if (is.logical(old_obj)) {
     saveRDS(new_obj, path)
   } else {
+    rows_select <- !(old_obj[, column] %in% unique(new_obj[, column]))
+    old_obj <- old_obj[rows_select, ]
     saveRDS(rbind(old_obj, new_obj), path)
   }
 }
@@ -101,9 +105,17 @@ try_save_RDS <- function(new_obj, old_obj, path) {
 message("Message: Source... Script #1")
 source("Scripts/01_ETL.R")
 
-try_save_RDS(acti_files, actigraphy_headers_old, "./Rmd/Data/actigraphy_header.rds")
-try_save_RDS(actigraphy, actigraphy_static_old, "./Rmd/Data/actigraphy_static.rds")
+## Save RDS -- Headers
+try_save_RDS(acti_files, actigraphy_headers_old, "File", "./Rmd/Data/actigraphy_header.rds")
+## Save RDS -- Static Data
+try_save_RDS(actigraphy, actigraphy_static_old, "patient_ID", "./Rmd/Data/actigraphy_static.rds")
 message("Message: Saved... Headers & Static DataFrame")
+
+## Validation
+validate_actigraphy <- readRDS("./Rmd/Data/actigraphy_static.rds")
+
+assertthat::assert_that(all(table(validate_actigraphy$patient_ID, validate_actigraphy$Noon_Day) <= 720),
+                        msg = "Error: Some patients have more than 720 observations per day")
 
 ## ------ Off Wrist Filtering ------
 
@@ -134,14 +146,13 @@ actigraphy  %<>% merge(.,
   dplyr::filter(At_Least_96_Hours_On == T) %>%
   arrange(patient_ID, DateTime)
 
-
 ## ------ Source Proprietary Additions ------
 
 message("Message: Source... Script #2")
 source("Scripts/Proprietary_Additions.R")
 
 ## Save RDS
-try_save_RDS(actigraphy, actigraphy_filtered_old, "./Rmd/Data/actigraphy_filtered.rds")
+try_save_RDS(actigraphy, actigraphy_filtered_old, "patient_ID", "./Rmd/Data/actigraphy_filtered.rds")
 message("Message: Saved... Filtered DataFrame")
 
 ## ------ Source Results Script ------
@@ -156,6 +167,10 @@ if (!is.logical(actigraphy_results_old)) {
   for (nam in names(results)) {
     new <- results[[nam]]
     old <- actigraphy_results_old[[nam]]
+    
+    rows_select <- !(old[, "patient_ID"] %in% unique(new[, "patient_ID"]))
+    old <- old[rows_select, ]
+    
     results_bind[[nam]] <- rbind(old, new)
   }
 } else {

@@ -161,7 +161,7 @@ results$patient_catalog <- xtabs(~ patient_ID + Noon_Day + Group + Date, actigra
 
 results$major_results <- NULL
 major_results <- results$sleep_metrics %>%
-          select(-Interval, -Sleep, -Wake) 
+  select(-Interval, -Sleep, -Wake)
 
 for (i in 2:length(results)) {
   major_results <- merge(major_results, results[i][[1]],
@@ -178,7 +178,8 @@ major_results %<>% arrange(patient_ID, Noon_Day) %>%
         by = "patient_ID")
 
 results$major_results <- major_results %>%
-  arrange(patient_ID)
+  arrange(patient_ID) %>%
+  filter(suppressWarnings(!duplicated(.)))
 rm(major_results)
 
 ## ------ Save RDS ------
