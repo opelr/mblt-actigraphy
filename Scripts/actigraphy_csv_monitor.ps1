@@ -1,7 +1,7 @@
 ## Monitor the Actigraphy CSV directory and run a nightly cron-job to update
 ## files changed or added in the last 24 hours
 
-# Schtasks /create /tn "Actigraphy Data ETL" /sc daily /st 22:00 /tr "D:\lab\code\r\LabProjects\human\h4085\mblt-actigraphy\Scripts\directory_monitor.ps1"
+# Schtasks /create /tn "Actigraphy Data ETL" /sc daily /st 22:00 /tr "D:\lab\code\r\LabProjects\human\h4085\mblt-actigraphy\Scripts\actigraphy_csv_monitor.ps1"
 
 cd D:\lab\code\r\LabProjects\human\h4085\mblt-actigraphy\
 $Script_Path = "D:\lab\code\r\LabProjects\human\h4085\mblt-actigraphy\Scripts\00_actigraphy-cli.R"
