@@ -98,6 +98,8 @@ IV_IS_test_results %<>%
   arrange(patient_ID, Noon_Day) %>%
   mutate(patient_ID = factor(patient_ID))
 
+saveRDS(IV_IS_test_results, "IV_IS_Test.rds")
+
 rm(IV_IS_test)
 
 ## ------ Plot fake_actig Variables ------
