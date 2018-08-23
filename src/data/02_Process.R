@@ -10,7 +10,7 @@ library(reshape2)
 library(zoo)
 
 results <- list()
-source("src/Functions.R")
+source("src/data/Functions.R")
 actigraphy <- readRDS("data/rds/actigraphy_filtered.rds")
 
 ## ------ Basic Sleep Metrics ------

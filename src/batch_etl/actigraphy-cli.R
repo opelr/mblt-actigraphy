@@ -103,7 +103,7 @@ try_save_RDS <- function(new_obj, old_obj, column, path) {
 }
 
 message("Message: Source... Script #1")
-source("src/01_ETL.R")
+source("src/data/01_ETL.R")
 
 ## Save RDS -- Headers
 try_save_RDS(acti_files, actigraphy_headers_old, "File", "./data/rds/actigraphy_header.rds")
@@ -149,7 +149,7 @@ actigraphy <- actigraphy %>%
 ## ------ Source Proprietary Additions ------
 
 message("Message: Source... Script #2")
-source("src/Proprietary_Additions.R")
+source("src/data/Proprietary_Additions.R")
 
 ## Save RDS
 try_save_RDS(actigraphy, actigraphy_filtered_old, "patient_ID", "./data/rds/actigraphy_filtered.rds")
@@ -158,7 +158,7 @@ message("Message: Saved... Filtered DataFrame")
 ## ------ Source Results Script ------
 
 message("Message: Source... Script #3")
-source("src/02_Process.R")
+source("src/data/02_Process.R")
 
 # rbind each dataframe in the results list object
 

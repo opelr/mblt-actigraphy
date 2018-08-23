@@ -13,7 +13,7 @@ suppressMessages(library(openxlsx))
 suppressMessages(library(reshape2))
 # devtools::install_github("opelr/opelR")
 
-source("src/Functions.R")
+source("src/data/Functions.R")
 
 # FILE_PATH <- "D:/data/acquired_data/human/h4085/Actigraphy/CSV/"
 # FILE_MASK <- "(.*)_Bedtime.csv"

@@ -4,7 +4,7 @@
 # Schtasks /create /tn "Actigraphy Data ETL" /sc daily /st 22:00 /tr "D:\lab\code\r\LabProjects\human\h4085\mblt-actigraphy\Scripts\actigraphy_csv_monitor.ps1"
 
 cd D:\lab\code\r\LabProjects\human\h4085\mblt-actigraphy\
-$Script_Path = "D:\lab\code\r\LabProjects\human\h4085\mblt-actigraphy\Scripts\00_actigraphy-cli.R"
+$Script_Path = "D:\lab\code\r\LabProjects\human\h4085\mblt-actigraphy\src\batch_etl\actigraphy-cli.R"
 
 $Data_Path = "D:\data\acquired_data\human\h4085\Actigraphy\CSV\"
 $Filter = "*_Bedtime.csv"
